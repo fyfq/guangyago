@@ -1,0 +1,16 @@
+node_modules/
+web/dist/
+web/node_modules/
+bin/
+data/
+config.yaml
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+# embed 目录只保留占位文件，产物由 make web 生成
+internal/web/dist/*
+!internal/web/dist/.gitkeep
+# 本地运行数据
+.workbuddy/
+*.log

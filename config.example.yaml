@@ -1,0 +1,58 @@
+server:
+    addr: :8090
+    base_path: ""
+storage:
+    dsn: data/guangya.db
+    data_dir: data
+    poster_dir: data/posters
+tmdb:
+    api_key: ""  # TMDB Read Access Token（JWT）或 32 位 api_key
+    language: zh-CN
+    image_base: https://image.tmdb.org/t/p
+    poster_size: w500
+    min_score: 0.6
+    cache_poster: true
+telegram:
+    token: ""  # 从 @BotFather 获取
+    chat_id: "@your_channel"  # 频道用户名或 -100 开头的数字 ID
+    enable_bot: true
+    silent: false
+netdisk:
+    guangya_hosts:
+        - guangyapan.com
+    user_agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36
+    cookie: ""
+    timeout: 20
+pipeline:
+    workers: 2
+    max_retry: 3
+    retry_delay: 5
+    auto_push: true
+proxy:
+    enable: true
+    addr: 127.0.0.1:7890  # socks5 代理地址
+    username: ""
+    password: ""
+# 限流：默认值即官方建议值
+rate_limit:
+    tmdb:
+        enable: true
+        # 官方保护阈值约 40 次/秒（软限制，随时可能调整），默认只用 4 次/秒留余量
+        per_second: 4
+        burst: 4
+        # 同一 Key 还被其他应用共用时打开，速率自动减半
+        shared_credentials: false
+    telegram:
+        enable: true
+        # 官方：同一会话 1 条/秒、群组 20 条/分钟；默认 3100ms ≈ 19 条/分钟
+        interval_ms: 3100
+        # 只推频道（不含群组）时打开，可按官方建议调到 1100ms
+        channel_only: false
+        # 同一 Bot Token 还被其他应用共用时打开，间隔 ×1.5
+        shared_credentials: false
+        # 付费广播可放宽下限，默认不启用
+        paid_broadcast: false
+    guangya:
+        enable: true
+        # 光鸭暂无官方配额，分享检测并发保守取 2
+        concurrency: 2

@@ -5,7 +5,8 @@
 ## 约定
 
 - **基址**：所有 JSON 接口都在 `/api` 下，前端 `api.ts` 会自动补前缀。示例里的 `localhost:8090` 是默认监听地址。
-- **认证**：会话 Cookie `gy_session`（HttpOnly / SameSite=Lax / 7 天），由 `POST /api/auth/login` 下发。除下表标注「公开」的接口外，一律需要登录；标注「管理员」的还需要 `role=admin`。
+- **认证**：会话 Cookie `gy_session`（HttpOnly / SameSite=Lax / Secure 视 `server.secure_cookie` 而定 / 7 天），由 `POST /api/auth/login` 下发。除下表标注「公开」的接口外，一律需要登录；标注「管理员」的还需要 `role=admin`。
+  - `server.secure_cookie` 省略时按当次请求是否 TLS 自动判定；反代在边缘终止 TLS 时请显式设为 `true`，纯本地 http 调试可设 `false`。
   - 未登录 → `401 {"error":"未登录"}`；Cookie 有效但会话过期/被撤销 → `401 {"error":"登录已失效"}`；角色不足 → `403 {"error":"需要管理员权限"}`。
 - **CSRF**：所有 `POST/PUT/PATCH/DELETE` 都做了同源校验。浏览器跨源 XHR 会带 `Origin`，不同源直接 `403 {"error":"跨站请求已被拒绝"}`；`curl` 不带 Origin/Referer 时放行。
 - **请求体**：普通接口上限 1MB，`/api/links/import` 32MB。JSON 接口 `Content-Type: application/json`。

@@ -47,6 +47,16 @@ expect_code() {
   fi
 }
 
+# expect_absent <说明> <实际> <不应出现的子串>
+expect_absent() {
+  if [[ "$2" == *"$3"* ]]; then
+    printf '  ✗ %s：不应包含 %s，实际 %s\n' "$1" "$3" "${2:0:200}"
+    FAIL=1
+  else
+    pass "$1"
+  fi
+}
+
 get() { curl -sS -m 10 "$BASE$1" 2>/dev/null; }
 get_code() { curl -sS -m 10 -o /dev/null -w '%{http_code}' "$BASE$1" 2>/dev/null; }
 # post <路径> <JSON>；同源头是 CSRF 校验的前提，缺失会被 403
@@ -57,6 +67,12 @@ post() {
 }
 post_code() {
   curl -sS -m 10 -o /dev/null -w '%{http_code}' -X POST \
+    -H 'Content-Type: application/json' -H "Origin: $BASE" \
+    -d "$2" "$BASE$1" 2>/dev/null
+}
+# admin_post <路径> <JSON>；带上登录 Cookie，用于只对管理员开放的接口
+admin_post() {
+  curl -sS -m 10 -b "$WORK/ck" -X POST \
     -H 'Content-Type: application/json' -H "Origin: $BASE" \
     -d "$2" "$BASE$1" 2>/dev/null
 }
@@ -146,6 +162,32 @@ expect_code 'sitemap 带缓存头' "$(curl -sS -m 10 -o /dev/null -w '%{http_cod
 expect_contains 'sitemap 响应有 Cache-Control' "$(cat "$WORK/sitemap.hdr")" 'Cache-Control: public, max-age=3600'
 expect_contains '结构化数据是 WebSite' "$(get /api/structured-data)" '"WebSite"'
 expect_code '不存在的资源深链 404' "$(get_code '/api/portal/link/999999')" "404"
+
+echo '站点品牌'
+# 占位符必须由服务端替换，否则爬虫与首屏源码里会出现字面量 {{SITE_NAME}}
+expect_absent '首页不残留站点名占位符' "$index_html" '{{SITE_NAME}}'
+expect_contains '未配置时用默认站点名' "$index_html" '<title>光鸭 GO - 网盘资源分享平台</title>'
+expect_contains '保存站点标题' "$(admin_post /api/settings '{"seo":{"site_name":"冒烟站"}}')" '"ok":true'
+expect_contains '首页标题跟随配置' "$(get /)" '<title>冒烟站 - 网盘资源分享平台</title>'
+expect_contains '品牌接口无需登录即可读取' "$(get /api/branding)" '"site_name":"冒烟站"'
+
+# 只需要过服务端的内容嗅探，8 字节 PNG 签名足够，不必带完整图片
+printf '\211PNG\r\n\032\n' >"$WORK/logo.png"
+cp "$WORK/logo.png" "$WORK/icon.png"
+branding_upload="$(curl -sS -m 10 -b "$WORK/ck" -X POST -H "Origin: $BASE" \
+  -F "logo=@$WORK/logo.png" -F "icon=@$WORK/icon.png" "$BASE/api/branding" 2>/dev/null)"
+expect_contains '上传 logo 与站点图标' "$branding_upload" '"logo_url":"/branding/logo.png?v='
+expect_contains '图标带版本号' "$branding_upload" '"icon_url":"/branding/icon.png?v='
+printf 'not an image at all' >"$WORK/bad.png"
+expect_code '非图片被拒' "$(curl -sS -m 10 -b "$WORK/ck" -o /dev/null -w '%{http_code}' -X POST \
+  -H "Origin: $BASE" -F "logo=@$WORK/bad.png" "$BASE/api/branding" 2>/dev/null)" "400"
+expect_code '素材按配置里的文件名回源' \
+  "$(curl -sS -m 10 -o /dev/null -w '%{http_code}' -D "$WORK/brand.hdr" "$BASE/branding/logo.png" 2>/dev/null)" "200"
+expect_contains '素材响应有缓存头' "$(cat "$WORK/brand.hdr")" 'Cache-Control: public, max-age=86400'
+expect_code '未登记的素材名 404' "$(get_code /branding/icon.gif)" "404"
+expect_contains '首页注入站点图标' "$(get /)" '<link rel="icon" href="/branding/icon.png?v='
+expect_contains '清除 logo' "$(curl -sS -m 10 -b "$WORK/ck" -X DELETE -H "Origin: $BASE" \
+  "$BASE/api/branding?kind=logo" 2>/dev/null)" '"logo_url":""'
 
 echo '退出登录'
 expect_code '登出' "$(curl -sS -m 10 -b "$WORK/ck" -o /dev/null -w '%{http_code}' -X POST \

@@ -24,3 +24,5 @@ backups/
 *.zip
 *.tar.gz
 guangya-go
+# 测试覆盖率报告
+coverage.out

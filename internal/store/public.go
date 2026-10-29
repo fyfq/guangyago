@@ -42,7 +42,8 @@ func (s *Store) ListPublic(f model.PublicFilter) ([]model.PublicLink, int, error
 	}
 
 	rows, err := s.db.Query(
-		`SELECT `+publicColumns+` FROM links WHERE `+clause+` ORDER BY `+order+` LIMIT ? OFFSET ?`,
+		// clause/order 均来自本文件常量与 publicOrder 白名单，用户输入只通过 ? 占位符传入。
+		`SELECT `+publicColumns+` FROM links WHERE `+clause+` ORDER BY `+order+` LIMIT ? OFFSET ?`, // #nosec G202
 		append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
@@ -119,7 +120,7 @@ func (s *Store) PublicStats(f model.PublicFilter) (model.PublicStats, error) {
 
 	clause, args = publicWhereClause(f, true, false)
 	rows, err := s.db.Query(
-		`SELECT year, COUNT(*) FROM links WHERE `+clause+` AND year > 0 GROUP BY year ORDER BY year DESC`,
+		`SELECT year, COUNT(*) FROM links WHERE `+clause+` AND year > 0 GROUP BY year ORDER BY year DESC`, // #nosec G202 -- clause 只由本文件常量与 ? 占位符拼出
 		args...)
 	if err != nil {
 		return out, err

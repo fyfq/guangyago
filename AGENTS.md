@@ -95,7 +95,44 @@ api ──▶ 所有其它内部包
 6. **一个 PR ≤ 300 行 diff**。超过就拆——AI 一次生成 800 行时人的注意力会崩，评审只是走过场。
 7. **每次改 `web/` 都必须 `make web && go build ./...`**（见 [auto memory: frontend-embed-rebuild]），否则 embed 里的前端和后端会不一致。
 
-## 七、Reviewer 快速清单
+## 七、提交边界（哪些提交、哪些不提交）
+
+### 必须提交
+
+| 类别 | 文件 |
+|---|---|
+| 源码 | `cmd/`、`internal/`（除 `internal/web/dist/` 产物）、`web/src/` |
+| 构建与部署 | `Makefile`、`Dockerfile`、`docker-compose.yml`、`.dockerignore`、`.github/` |
+| 依赖锁定 | `go.mod`、`go.sum`、`web/package.json`、`web/package-lock.json` |
+| 配置模板 | `config.example.yaml`、`.env.example` |
+| 文档 | `README.md`、`docs/`、`AGENTS.md` |
+| 占位文件 | `internal/web/dist/.gitkeep` —— 保证空目录下 `//go:embed all:dist` 仍可编译 |
+
+### 绝不提交（`.gitignore` 已覆盖）
+
+| 类别 | 文件 |
+|---|---|
+| 密钥与运行配置 | `config.yaml`、`.env`、`.env.*`（`!` 例外：`.env.example`） |
+| 运行数据 | `data/`（含 `session.key`、数据库、海报）、`backups/`、`.workbuddy/` |
+| 构建产物 | `bin/`、`web/dist/`、`internal/web/dist/*`（`!` 例外：`.gitkeep`）、`guangya-go`、`*.zip`、`*.tar.gz` |
+| 依赖目录 | `node_modules/`、`web/node_modules/` |
+| 杂项 | `.DS_Store`、`*.log`、`*.db`、`*.db-wal`、`*.db-shm` |
+
+### 提交前须确认
+
+- 新增依赖（`go.mod` / `package.json`）：先问是否必要。
+- 数据库 schema 变更：`schema_meta.version` 必须 +1，并说明迁移路径。
+- 示例里的真实域名、Bot Token、频道 ID、提取码必须替换为占位值。
+
+### 提交前自检
+
+```bash
+git status --short          # 确认没有把 data/ config.yaml 之类带进来
+make lint                   # vet + staticcheck + gosec + 前端 type-check
+git diff --cached --stat    # 单次 diff 控制在 300 行内
+```
+
+## 八、Reviewer 快速清单
 
 - [ ] 有无 `_ = err`？
 - [ ] 有无 `http.Response.Body` 未包 `io.LimitReader`？

@@ -868,7 +868,7 @@ func (c *Client) SavePoster(ctx context.Context, r *Result) string {
 	if r == nil || r.PosterURL == "" || !c.cache || c.posterDir == "" {
 		return ""
 	}
-	if err := os.MkdirAll(c.posterDir, 0o755); err != nil {
+	if err := os.MkdirAll(c.posterDir, 0o750); err != nil {
 		return ""
 	}
 	name := fmt.Sprintf("%s-%d.jpg", r.MediaType, r.TMDBID)

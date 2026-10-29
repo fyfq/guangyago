@@ -194,7 +194,11 @@ func main() {
 		})
 	}
 
-	httpSrv := &http.Server{Addr: cfg.Server.Addr, Handler: r}
+	httpSrv := &http.Server{
+		Addr:              cfg.Server.Addr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 	go func() {
 		slog.Info("服务已启动", "addr", cfg.Server.Addr)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

@@ -19,10 +19,9 @@ import (
 // loginGuard 按维度（IP / 用户名）统计最近失败次数，连续失败后短暂锁定。
 // 状态持久化到 SQLite，服务重启不会重置；进程内再做一层短 TTL 缓存以省去热路径查询。
 type loginGuard struct {
-	mu      sync.Mutex
-	cache   map[string]*loginAttempt
-	ttl     time.Duration
-	penalty func() // 记录失败的持久化钩子，由外部注入以避免循环依赖
+	mu    sync.Mutex
+	cache map[string]*loginAttempt
+	ttl   time.Duration
 }
 
 type loginAttempt struct {
@@ -43,16 +42,6 @@ func newLoginGuard() *loginGuard {
 // keyIP / keyUser 是两个维度的记录主键；用户名统一小写以合并大小写变体。
 func keyIP(ip string) string     { return "ip:" + ip }
 func keyUser(name string) string { return "u:" + strings.ToLower(strings.TrimSpace(name)) }
-
-func (g *loginGuard) blocked(key string, now time.Time) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	a, ok := g.entries()[key]
-	return ok && now.Before(a.until)
-}
-
-// entries 只在测试路径用到，实际读取通过 load。
-func (g *loginGuard) entries() map[string]*loginAttempt { return g.cache }
 
 // load 从进程缓存读取，缺失时懒查 DB；查询失败视作未锁定，避免因数据库故障阻断登录。
 func (g *loginGuard) load(store *store.Store, key string, now time.Time) *loginAttempt {

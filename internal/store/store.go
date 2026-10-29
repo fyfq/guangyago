@@ -21,7 +21,7 @@ type Store struct {
 // Open 打开数据库并执行迁移。
 func Open(dsn string) (*Store, error) {
 	if dir := filepath.Dir(dsn); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, fmt.Errorf("创建数据目录失败: %w", err)
 		}
 	}
@@ -208,7 +208,8 @@ func (s *Store) List(f model.ListFilter) ([]model.Link, int, error) {
 	if offset < 0 {
 		offset = 0
 	}
-	q := `SELECT ` + columns + ` FROM links WHERE ` + clause +
+	// clause 完全由本函数内的字面量片段拼出，用户输入只通过 args 占位符传递。
+	q := `SELECT ` + columns + ` FROM links WHERE ` + clause + // #nosec G202 -- 拼接片段仅含常量与 ? 占位符
 		` ORDER BY id DESC LIMIT ? OFFSET ?`
 	rows, err := s.db.Query(q, append(args, limit, offset)...)
 	if err != nil {
@@ -245,7 +246,7 @@ func (s *Store) IDsByStatuses(statuses []model.Status) ([]int64, error) {
 		return nil, nil
 	}
 	ph, args := idsPlaceholders(statuses)
-	rows, err := s.db.Query(`SELECT id FROM links WHERE status IN (`+ph+`) ORDER BY id`, args...)
+	rows, err := s.db.Query(`SELECT id FROM links WHERE status IN (`+ph+`) ORDER BY id`, args...) // #nosec G202 -- ph 只由 idsPlaceholders 生成的 ? 组成
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +332,7 @@ func (s *Store) DeleteMany(ids []int64) (int64, error) {
 		return 0, nil
 	}
 	ph, args := idsPlaceholders(ids)
-	res, err := s.db.Exec(`DELETE FROM links WHERE id IN (`+ph+`)`, args...)
+	res, err := s.db.Exec(`DELETE FROM links WHERE id IN (`+ph+`)`, args...) // #nosec G202 -- ph 只由 idsPlaceholders 生成的 ? 组成
 	if err != nil {
 		return 0, err
 	}

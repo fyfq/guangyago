@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    # 纯文档 / 元数据改动不重建镜像，省 runner 和构建时间。
+    # 注意：paths 过滤对 tag 推送同样生效，若某个 v* tag 相对上一提交只改了这些文件，
+    # 该次发布不会自动构建，届时用 workflow_dispatch 手动触发即可。
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
   workflow_dispatch:
 
 # 同一分支重复推送时取消上一次未完成的构建，避免并发占满 runner

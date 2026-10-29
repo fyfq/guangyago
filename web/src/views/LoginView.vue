@@ -35,6 +35,16 @@ async function submit() {
 
 onMounted(async () => {
   document.title = '登录 · 光鸭 GO'
+  // 检查是否已安装，未安装则跳转到安装页
+  try {
+    const status = await api.setupStatus()
+    if (!status.installed) {
+      location.replace('/setup')
+      return
+    }
+  } catch {
+    // 接口异常继续
+  }
   // 已经登录过就直接进后台
   try {
     await api.me()
@@ -61,7 +71,7 @@ onMounted(async () => {
         @submit.prevent="submit"
       >
         <label class="mb-1.5 block text-[13px] font-medium" for="login-username">用户名</label>
-        <Input id="login-username" v-model="username" placeholder="admin" autocomplete="username" />
+        <Input id="login-username" v-model="username" placeholder="请输入用户名" autocomplete="username" />
 
         <label class="mb-1.5 mt-4 block text-[13px] font-medium" for="login-password">密码</label>
         <Input

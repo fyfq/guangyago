@@ -341,6 +341,20 @@ export const api = {
       body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
     }),
 
+  // 安装向导
+  setupStatus: () => request<{ installed: boolean }>('/setup/status'),
+  setup: (input: {
+    username: string
+    password: string
+    display_name?: string
+    tmdb_api_key?: string
+  }) =>
+    request<{ ok: boolean; user_id: number }>('/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+
   // 用户管理（仅管理员）
   users: () => request<{ total: number; items: User[] }>('/users'),
   createUser: (input: { username: string; password: string; display_name?: string; role: Role }) =>

@@ -215,21 +215,22 @@ func limitBody() gin.HandlerFunc {
 	}
 }
 
-// ensureAdmin 在用户表为空时创建初始管理员。
-// 默认密码仅用于首次启动，登录后台后应立即修改。
+// ensureAdmin 在用户表为空时检查环境变量，若设置了 ADMIN_PASSWORD 则创建初始管理员。
+// 否则跳过，等待用户通过安装向导完成初始化。
 func ensureAdmin(st *store.Store) error {
 	n, err := st.CountUsers()
 	if err != nil || n > 0 {
 		return err
 	}
+	// 仅在明确设置了环境变量时才自动创建，否则留给安装向导
 	username := strings.TrimSpace(os.Getenv("ADMIN_USERNAME"))
+	password := os.Getenv("ADMIN_PASSWORD")
+	if password == "" {
+		slog.Info("系统未安装，请通过浏览器完成初始化配置")
+		return nil
+	}
 	if username == "" {
 		username = "admin"
-	}
-	password := os.Getenv("ADMIN_PASSWORD")
-	useDefault := password == ""
-	if useDefault {
-		password = "admin123"
 	}
 	hash, err := auth.HashPassword(password)
 	if err != nil {
@@ -244,11 +245,7 @@ func ensureAdmin(st *store.Store) error {
 	if err := st.CreateUser(u, hash); err != nil {
 		return err
 	}
-	if useDefault {
-		slog.Warn("已创建初始管理员，请登录后立即修改密码", "username", username, "password", password)
-	} else {
-		slog.Info("已创建初始管理员", "username", username)
-	}
+	slog.Info("已创建初始管理员", "username", username)
 	return nil
 }
 

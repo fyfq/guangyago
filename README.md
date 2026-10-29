@@ -2,7 +2,7 @@
 
 光鸭云盘分享链接管理工具：录入链接 → 取影视信息 → TMDB 刮削 → 推送 Telegram 频道。
 
-设计文档见 `docs/design.md`，技术选型见 `docs/tech-selection.md`。
+设计文档见 `docs/design.md`，技术选型见 `docs/tech-selection.md`，界面规范见 `docs/design-system.md`。
 
 ## 当前进度：M1 ~ M3 已完成，M4 页面已完成
 

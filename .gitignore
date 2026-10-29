@@ -23,3 +23,4 @@ backups/
 # 部署产物
 *.zip
 *.tar.gz
+guangya-go

@@ -47,8 +47,10 @@ func (s *Server) Register(r *gin.Engine) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// 公开接口：健康检查、登录、资源门户
+	// 公开接口：健康检查、登录、资源门户、安装向导
 	r.POST("/api/auth/login", s.login)
+	r.GET("/api/setup/status", s.setupStatus)
+	r.POST("/api/setup", s.setup)
 	portal := r.Group("/api/portal")
 	{
 		portal.GET("/links", s.portalLinks)

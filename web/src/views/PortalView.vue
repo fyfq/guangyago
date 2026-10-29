@@ -10,6 +10,7 @@ import {
   ExternalLink,
   RotateCcw,
   Star,
+  CalendarDays,
   AlertCircle,
   ChevronDown,
 } from 'lucide-vue-next'
@@ -27,7 +28,7 @@ const stats = ref<PortalStats | null>(null)
 const keyword = ref('')
 const media = ref('')
 const year = ref(0)
-const sort = ref<'new' | 'rating'>('new')
+const sort = ref<PortalSort>('new')
 const loading = ref(false)
 const loadingMore = ref(false)
 const error = ref('')
@@ -38,7 +39,8 @@ let statsSeq = 0
 let timer: number | undefined
 let urlTimer: number | undefined
 
-const SORTS = ['new', 'rating'] as const
+const SORTS = ['new', 'release', 'rating'] as const
+type PortalSort = (typeof SORTS)[number]
 
 // 页面状态全部映射到查询串，sitemap 里的 /?id=<n> 才有对应内容
 function applyURL() {
@@ -49,7 +51,7 @@ function applyURL() {
   const y = Number(p.get('year'))
   year.value = Number.isInteger(y) && y > 0 ? y : 0
   const s = p.get('sort')
-  sort.value = (SORTS as readonly string[]).includes(s ?? '') ? (s as 'new' | 'rating') : 'new'
+  sort.value = (SORTS as readonly string[]).includes(s ?? '') ? (s as PortalSort) : 'new'
   detail.value = null
   const id = Number(p.get('id'))
   if (Number.isInteger(id) && id > 0) openDeepLink(id)
@@ -247,7 +249,12 @@ watch(keyword, () => {
   schedule(300)
   scheduleURL()
 })
-watch([media, year, sort, detail], scheduleURL)
+// 分类、年份、排序都会改变结果集，地址同步之外还要重新取一次；详情只改地址不查库
+watch([media, year, sort], () => {
+  schedule(0)
+  scheduleURL()
+})
+watch(detail, scheduleURL)
 // 品牌信息是异步取的，站点名到位后要把已经写好的标题跟新一次
 watch(() => branding.site_name, syncTitle)
 
@@ -407,6 +414,18 @@ onUnmounted(() => {
                 @click="sort = 'new'"
               >
                 最新分享
+              </button>
+              <button
+                class="flex items-center gap-1 rounded-full px-2.5 py-1 text-[13px] transition-colors"
+                :class="
+                  sort === 'release'
+                    ? 'bg-[var(--color-surface)] font-medium text-[var(--color-ink)] shadow-sm'
+                    : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]'
+                "
+                @click="sort = 'release'"
+              >
+                <CalendarDays class="h-3.5 w-3.5" />
+                上映时间
               </button>
               <button
                 class="flex items-center gap-1 rounded-full px-2.5 py-1 text-[13px] transition-colors"

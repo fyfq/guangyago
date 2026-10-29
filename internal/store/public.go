@@ -19,9 +19,12 @@ vote_average, runtime, poster_url, url, code, shared_at`
 
 // publicOrder 是允许的排序方式白名单，避免把用户输入拼进 SQL。
 var publicOrder = map[string]string{
-	"new":    `CASE WHEN shared_at = '' THEN 1 ELSE 0 END, shared_at DESC, id DESC`,
-	"rating": `vote_average DESC, id DESC`,
-	"year":   `year DESC, id DESC`,
+	"new": `CASE WHEN shared_at = '' THEN 1 ELSE 0 END, shared_at DESC, id DESC`,
+	// 上映时间：存量记录多半只有年份，缺完整日期时退到当年 1 月 1 日参与同一套字典序，
+	// 既不会把老数据整体甩到末尾，也能和新刮出的精确日期正确穿插。
+	"release": `COALESCE(NULLIF(release_date, ''), CASE WHEN year > 0 THEN year || '-01-01' ELSE '' END) DESC, id DESC`,
+	"rating":  `vote_average DESC, id DESC`,
+	"year":    `year DESC, id DESC`,
 }
 
 // ListPublic 查询门户列表，返回记录与总数。

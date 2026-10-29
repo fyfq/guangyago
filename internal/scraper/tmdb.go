@@ -194,6 +194,7 @@ type Result struct {
 	Title          string
 	OriginalTitle  string
 	Year           int
+	ReleaseDate    string // 上映/首播日期（YYYY-MM-DD），TMDB 缺失时为空
 	Overview       string
 	Genres         string
 	VoteAverage    float64
@@ -511,6 +512,7 @@ func (d *detail) toResult(mediaType string, c *Client) *Result {
 		Title:         title,
 		OriginalTitle: original,
 		Year:          yearOf(date),
+		ReleaseDate:   normalizeReleaseDate(date),
 		Overview:      d.Overview,
 		Genres:        strings.Join(genres, " / "),
 		VoteAverage:   d.VoteAverage,
@@ -935,4 +937,14 @@ func yearOf(date string) int {
 	}
 	y, _ := strconv.Atoi(date[:4])
 	return y
+}
+
+// normalizeReleaseDate 只接受完整的 YYYY-MM-DD。TMDB 偶有 "2024" 这类残串，
+// 拿来排序会跟完整日期混成两种字典序，一律当未知处理。
+func normalizeReleaseDate(date string) string {
+	date = strings.TrimSpace(date)
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return ""
+	}
+	return date
 }

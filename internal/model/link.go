@@ -35,6 +35,7 @@ type Link struct {
 	Title         string    `json:"title"`
 	OriginalTitle string    `json:"original_title"`
 	Year          int       `json:"year"`
+	ReleaseDate   string    `json:"release_date"` // TMDB 的上映/首播日期（YYYY-MM-DD），未知为空
 	MediaType     MediaType `json:"media_type"`
 	TMDBID        int64     `json:"tmdb_id"`
 	Overview      string    `json:"overview"`

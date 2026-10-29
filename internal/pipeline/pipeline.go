@@ -361,6 +361,7 @@ func (p *Pipeline) scrape(ctx context.Context, j job, l *model.Link, sc *scraper
 	l.Title = res.Title
 	l.OriginalTitle = res.OriginalTitle
 	l.Year = res.Year
+	l.ReleaseDate = res.ReleaseDate
 	l.MediaType = model.MediaType(res.MediaType)
 	l.TMDBID = res.TMDBID
 	l.Overview = res.Overview

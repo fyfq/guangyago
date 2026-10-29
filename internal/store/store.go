@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,16 +54,39 @@ func Open(dsn string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 // schemaVersion 是当前代码期望的数据库结构版本，仅用于诊断；
-// 迁移语句本身是幂等的（IF NOT EXISTS / INSERT OR IGNORE）。
-const schemaVersion = 1
+// 迁移语句本身是幂等的（IF NOT EXISTS / INSERT OR IGNORE / 先查后加列）。
+// v2：links 增加 release_date（TMDB 上映/首播日期），供门户按上映时间排序。
+const schemaVersion = 2
 
 func (s *Store) migrate() error {
 	if _, err := s.db.Exec(migrateSQL); err != nil {
 		return fmt.Errorf("迁移失败: %w", err)
 	}
+	if err := s.ensureReleaseDateColumn(); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(`INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)`, fmt.Sprint(schemaVersion)); err != nil {
 		return fmt.Errorf("写入 schema 版本失败: %w", err)
 	}
+	return nil
+}
+
+// ensureReleaseDateColumn 给存量库补上 release_date。
+// SQLite 的 ALTER TABLE ADD COLUMN 不幂等，重复执行会报 duplicate column，
+// 而 CREATE TABLE IF NOT EXISTS 对已经存在的表不加新列，所以先查表结构再决定要不要加。
+func (s *Store) ensureReleaseDateColumn() error {
+	var found int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('links') WHERE name = 'release_date'`).Scan(&found); err != nil {
+		return fmt.Errorf("检查 links 表结构失败: %w", err)
+	}
+	if found > 0 {
+		return nil
+	}
+	if _, err := s.db.Exec(`ALTER TABLE links ADD COLUMN release_date TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("添加 release_date 列失败: %w", err)
+	}
+	slog.Info("schema 迁移：links 已补 release_date 列", "schema_version", schemaVersion)
 	return nil
 }
 
@@ -77,6 +101,7 @@ CREATE TABLE IF NOT EXISTS links (
 	title          TEXT NOT NULL DEFAULT '',
 	original_title TEXT NOT NULL DEFAULT '',
 	year           INTEGER NOT NULL DEFAULT 0,
+	release_date   TEXT NOT NULL DEFAULT '',
 	media_type     TEXT NOT NULL DEFAULT '',
 	tmdb_id        INTEGER NOT NULL DEFAULT 0,
 	overview       TEXT NOT NULL DEFAULT '',
@@ -294,11 +319,11 @@ func (s *Store) UpdateStatus(id int64, status model.Status, errMsg string) error
 // UpdateScraped 写入 TMDB 刮削结果。
 func (s *Store) UpdateScraped(id int64, l *model.Link) error {
 	_, err := s.db.Exec(`UPDATE links SET
-title = ?, original_title = ?, year = ?, media_type = ?, tmdb_id = ?,
+title = ?, original_title = ?, year = ?, release_date = ?, media_type = ?, tmdb_id = ?,
 overview = ?, genres = ?, vote_average = ?, runtime = ?, poster_url = ?, poster_path = ?,
 status = ?, error = '', updated_at = CURRENT_TIMESTAMP
 WHERE id = ?`,
-		l.Title, l.OriginalTitle, l.Year, string(l.MediaType), l.TMDBID,
+		l.Title, l.OriginalTitle, l.Year, l.ReleaseDate, string(l.MediaType), l.TMDBID,
 		l.Overview, l.Genres, l.VoteAverage, l.Runtime, l.PosterURL, l.PosterPath,
 		string(model.StatusScraped), id)
 	return err
@@ -340,7 +365,7 @@ func (s *Store) DeleteMany(ids []int64) (int64, error) {
 }
 
 const columns = `id, share_id, url, code, source, raw_title, title, original_title, year,
-media_type, tmdb_id, overview, genres, vote_average, runtime, poster_url, poster_path,
+release_date, media_type, tmdb_id, overview, genres, vote_average, runtime, poster_url, poster_path,
 shared_at, share_status, status, error, tg_message_id, created_at, updated_at`
 
 type scanner interface {
@@ -352,7 +377,7 @@ func scanLink(row scanner) (*model.Link, error) {
 	var createdAt, updatedAt string
 	err := row.Scan(
 		&l.ID, &l.ShareID, &l.URL, &l.Code, &l.Source, &l.RawTitle, &l.Title,
-		&l.OriginalTitle, &l.Year, &l.MediaType, &l.TMDBID, &l.Overview, &l.Genres,
+		&l.OriginalTitle, &l.Year, &l.ReleaseDate, &l.MediaType, &l.TMDBID, &l.Overview, &l.Genres,
 		&l.VoteAverage, &l.Runtime, &l.PosterURL, &l.PosterPath, &l.SharedAt,
 		&l.ShareStatus, &l.Status, &l.Error, &l.TGMessageID, &createdAt, &updatedAt,
 	)

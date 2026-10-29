@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -224,7 +225,7 @@ func Caption(l *model.Link) string {
 	blocks = append(blocks, tail...)
 
 	caption := strings.Join(blocks, "\n\n")
-	if l.URL != "" {
+	if isHTTPURL(l.URL) {
 		caption = strings.Replace(
 			caption,
 			linkLabel,
@@ -233,6 +234,15 @@ func Caption(l *model.Link) string {
 		)
 	}
 	return strings.TrimSpace(caption)
+}
+
+// isHTTPURL 只给 http/https 地址生成链接，避免 javascript: 等协议进入卡片。
+func isHTTPURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
 }
 
 var overviewSpaceRe = regexp.MustCompile(`\s+`)

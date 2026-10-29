@@ -168,12 +168,73 @@ export interface ImportResult {
   ids: number[]
 }
 
+export type Role = 'admin' | 'operator'
+
+export interface User {
+  id: number
+  username: string
+  display_name: string
+  role: Role
+  enabled: boolean
+  last_login_at: string | null
+  created_at: string
+}
+
+/** 门户只暴露展示所需字段，不含内部状态与错误信息 */
+export interface PortalLink {
+  id: number
+  title: string
+  original_title: string
+  year: number
+  media_type: string
+  tmdb_id: number
+  overview: string
+  genres: string
+  vote_average: number
+  runtime: number
+  poster_url: string
+  url: string
+  code: string
+  shared_at: string
+}
+
+export interface PortalYearStat {
+  year: number
+  count: number
+}
+
+export interface PortalStats {
+  total: number
+  movies: number
+  tv: number
+  /** 已推送资源总数，不随筛选变化 */
+  library_total: number
+  years: PortalYearStat[]
+}
+
+export class ApiError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, init)
+  const res = await fetch(`/api${path}`, { credentials: 'same-origin', ...init })
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(text || `请求失败 ${res.status}`)
+    let message = text || `请求失败 ${res.status}`
+    try {
+      const body = JSON.parse(text) as { error?: string }
+      if (body?.error) message = body.error
+    } catch {
+      // 非 JSON 响应直接沿用原文
+    }
+    throw new ApiError(res.status, message)
   }
+  if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }
 
@@ -242,7 +303,14 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     }),
-  tasks: () => request<TaskProgress>('/tasks'),
+  tasks: (kind = '') => request<TaskProgress>(`/tasks${kind ? `?kind=${kind}` : ''}`),
+  /** 停止排队中的任务，kind 留空表示刮削与推送一起取消 */
+  cancelTasks: (kind = '') =>
+    request<{ canceled: number; kind: string }>('/tasks/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind }),
+    }),
   settings: () => request<Settings>('/settings'),
   saveSettings: (input: SettingsInput) =>
     request<{ ok: boolean }>('/settings', {
@@ -256,12 +324,73 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     }),
+
+  // 登录与账号
+  login: (username: string, password: string) =>
+    request<User>('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+  me: () => request<User>('/auth/me'),
+  changePassword: (oldPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>('/auth/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    }),
+
+  // 用户管理（仅管理员）
+  users: () => request<{ total: number; items: User[] }>('/users'),
+  createUser: (input: { username: string; password: string; display_name?: string; role: Role }) =>
+    request<User>('/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+  updateUser: (id: number, input: { display_name?: string; role?: Role; enabled?: boolean }) =>
+    request<User>(`/users/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+  resetUserPassword: (id: number, password: string) =>
+    request<{ ok: boolean }>(`/users/${id}/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    }),
+  deleteUser: (id: number) => request<{ deleted: number }>(`/users/${id}`, { method: 'DELETE' }),
+
+  // 公开门户
+  portalLinks: (params: {
+    q?: string
+    media_type?: string
+    year?: number
+    sort?: string
+    limit?: number
+    offset?: number
+  }) => {
+    const qs = new URLSearchParams()
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== '') qs.set(k, String(v))
+    })
+    return request<{ total: number; items: PortalLink[] }>(`/portal/links?${qs.toString()}`)
+  },
+  portalStats: (params: { q?: string; media_type?: string; year?: number } = {}) => {
+    const qs = new URLSearchParams()
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== '') qs.set(k, String(v))
+    })
+    return request<PortalStats>(`/portal/stats?${qs.toString()}`)
+  },
 }
 
 export const statusMeta: Record<Status, { label: string; cls: string }> = {
-  pending: { label: '待处理', cls: 'bg-[var(--color-brand-soft)] text-[var(--color-brand)]' },
+  pending: { label: '待处理', cls: 'bg-[var(--color-surface-hover)] text-[var(--color-muted)]' },
   review: { label: '待核查', cls: 'bg-[var(--color-warn-soft)] text-[var(--color-warn)]' },
-  scraping: { label: '刮削中', cls: 'bg-[var(--color-brand-soft)] text-[var(--color-brand)]' },
+  scraping: { label: '刮削中', cls: 'bg-[var(--color-info-soft)] text-[var(--color-info)]' },
   scraped: { label: '已刮削', cls: 'bg-[var(--color-ok-soft)] text-[var(--color-ok)]' },
   unmatched: { label: '未匹配', cls: 'bg-[var(--color-warn-soft)] text-[var(--color-warn)]' },
   pushed: { label: '已推送', cls: 'bg-[var(--color-ok-soft)] text-[var(--color-ok)]' },
@@ -271,7 +400,7 @@ export const statusMeta: Record<Status, { label: string; cls: string }> = {
 
 /** 影视类型标识：刮削结果必须能一眼看出是电影还是剧集 */
 export const mediaMeta: Record<string, { label: string; cls: string }> = {
-  movie: { label: '电影', cls: 'bg-[var(--color-brand-soft)] text-[var(--color-brand)]' },
+  movie: { label: '电影', cls: 'bg-[var(--color-info-soft)] text-[var(--color-info)]' },
   tv: { label: '剧集', cls: 'bg-[var(--color-warn-soft)] text-[var(--color-warn)]' },
 }
 

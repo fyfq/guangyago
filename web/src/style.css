@@ -1,19 +1,34 @@
 @import 'tailwindcss';
 
+/* 取自 qoder.com 的 --ant-color-* token：品牌绿 + 中性灰阶，控件圆角 6px */
 @theme {
-  --color-canvas: #fafaf9;
+  --color-canvas: #f2f4f2;
   --color-surface: #ffffff;
-  --color-line: #e7e5e4;
-  --color-ink: #1c1917;
-  --color-muted: #78716c;
-  --color-brand: #2563eb;
-  --color-brand-soft: #eff6ff;
-  --color-ok: #0f766e;
-  --color-ok-soft: #ecfdf5;
-  --color-warn: #b45309;
-  --color-warn-soft: #fffbeb;
-  --color-bad: #b91c1c;
-  --color-bad-soft: #fef2f2;
+  --color-surface-sunken: #f3f3f3;
+  --color-surface-hover: #eeeeeb;
+  --color-line: #e6e6e6;
+  --color-line-strong: #dddddd;
+
+  --color-ink: #141414;
+  --color-muted: #636261;
+  --color-faint: #7b7b76;
+
+  --color-brand: #2f7452;
+  --color-brand-hover: #245c41;
+  --color-brand-soft: #eaf7e7;
+  --color-brand-line: #cdecc8;
+
+  --color-ok: #35734a;
+  --color-ok-soft: #eefaf1;
+  --color-warn: #8a5a00;
+  --color-warn-soft: #fefbe8;
+  --color-bad: #bf3a32;
+  --color-bad-soft: #fdf2f0;
+  --color-info: #3563c4;
+  --color-info-soft: #e9f6fe;
+
+  --radius-control: 6px;
+  --radius-card: 8px;
 }
 
 html {
@@ -24,7 +39,9 @@ body {
   margin: 0;
   color: var(--color-ink);
   background: var(--color-canvas);
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  font-family:
+    'Instrument Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei',
+    'Segoe UI', sans-serif;
   font-size: 14px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
@@ -32,4 +49,19 @@ body {
 
 * {
   box-sizing: border-box;
+}
+
+/* 标题走宋体：装了思源宋体就用，否则回退系统宋体；拉丁字符仍走无衬线 */
+h1,
+h2,
+h3 {
+  font-family:
+    'Instrument Sans', 'Source Han Serif SC', 'Source Han Serif CN', 'Noto Serif CJK SC',
+    'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+  letter-spacing: 0.01em;
+}
+
+::selection {
+  background: var(--color-brand-line);
+  color: var(--color-ink);
 }

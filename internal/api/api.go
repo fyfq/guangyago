@@ -3,6 +3,7 @@ package api
 import (
 	"html"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -26,9 +27,13 @@ type Server struct {
 	configPath string
 	// reload 在配置变更后重建刮削与推送组件
 	reload func(*config.Config)
+	// loginGuard 记录登录失败次数，防止暴力猜密码
+	loginGuard *loginGuard
 }
 
-func New(s *store.Store) *Server { return &Server{store: s} }
+func New(s *store.Store) *Server {
+	return &Server{store: s, loginGuard: newLoginGuard()}
+}
 
 // WithRuntime 注入管道、配置与热更新回调。
 func (s *Server) WithRuntime(p *pipeline.Pipeline, cfg *config.Config, path string, reload func(*config.Config)) *Server {
@@ -42,8 +47,20 @@ func (s *Server) Register(r *gin.Engine) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	api := r.Group("/api")
+	// 公开接口：健康检查、登录、资源门户
+	r.POST("/api/auth/login", s.login)
+	portal := r.Group("/api/portal")
 	{
+		portal.GET("/links", s.portalLinks)
+		portal.GET("/stats", s.portalStats)
+	}
+
+	api := r.Group("/api", s.requireAuth())
+	{
+		api.GET("/auth/me", s.me)
+		api.POST("/auth/logout", s.logout)
+		api.POST("/auth/password", s.changePassword)
+
 		api.GET("/links", s.listLinks)
 		api.GET("/links/:id", s.getLink)
 		api.GET("/links/:id/caption", s.caption)
@@ -57,36 +74,59 @@ func (s *Server) Register(r *gin.Engine) {
 		api.POST("/scrape", s.scrape)
 		api.POST("/push", s.push)
 		api.GET("/tasks", s.taskStatus)
+		api.POST("/tasks/cancel", s.cancelTasks)
 		api.POST("/links/:id/scrape", s.scrapeOne)
 		api.POST("/links/:id/push", s.pushOne)
-		api.GET("/settings", s.settings)
-		api.POST("/settings", s.updateSettings)
-		api.POST("/settings/test", s.testConfig)
 		// TMDB 条目预览：补 ID 时先查询确认，再决定是否刮削
 		api.GET("/tmdb/lookup", s.tmdbLookup)
 		api.POST("/tmdb/lookup", s.tmdbLookup)
+
+		// 密钥、代理与账号管理只对管理员开放，运营改不了这些配置
+		admin := api.Group("", s.requireAdmin())
+		{
+			admin.GET("/settings", s.settings)
+			admin.POST("/settings", s.updateSettings)
+			admin.POST("/settings/test", s.testConfig)
+
+			users := admin.Group("/users")
+			users.GET("", s.listUsers)
+			users.POST("", s.createUser)
+			users.PATCH("/:id", s.updateUser)
+			users.POST("/:id/password", s.resetUserPassword)
+			users.DELETE("/:id", s.deleteUser)
+		}
 	}
 }
 
-func (s *Server) listLinks(c *gin.Context) {
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-	raw := c.Query("status")
-	f := model.ListFilter{
-		Keyword: c.Query("q"),
-		Limit:   limit,
-		Offset:  offset,
+// serverError 把内部错误写进日志，只向客户端返回通用提示，避免泄露实现细节。
+func serverError(c *gin.Context, err error) {
+	slog.Error("请求处理失败", "path", c.FullPath(), "err", err)
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
+}
+
+// parseID 读取路径里的 :id，非法时直接回 400。
+func parseID(c *gin.Context) (int64, bool) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "非法 ID"})
+		return 0, false
 	}
-	// status 支持逗号分隔多值，也支持 scraped_set / pending_set 两个语义集合
-	switch raw {
+	return id, true
+}
+
+// applyStatusFilter 解析 status 查询参数：支持单值、逗号分隔多值，
+// 以及 scraped_set / pending_set / push_set 三个语义集合。
+func applyStatusFilter(f *model.ListFilter, raw string) {
+	switch raw = strings.TrimSpace(raw); raw {
 	case "", "all":
 	case "scraped_set":
 		f.Statuses = model.ScrapedOnly
 	case "pending_set":
 		f.Statuses = model.PendingScrape
+	case "push_set":
+		f.Statuses = model.PushQueue
 	default:
-		parts := strings.Split(raw, ",")
-		for _, p := range parts {
+		for _, p := range strings.Split(raw, ",") {
 			if p = strings.TrimSpace(p); p != "" {
 				f.Statuses = append(f.Statuses, model.Status(p))
 			}
@@ -96,23 +136,37 @@ func (s *Server) listLinks(c *gin.Context) {
 			f.Statuses = nil
 		}
 	}
+}
+
+func (s *Server) listLinks(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	// 列表是分页接口，limit 上限由这里收口；导出与批量任务走各自的内部调用
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	f := model.ListFilter{
+		Keyword: c.Query("q"),
+		Limit:   limit,
+		Offset:  offset,
+	}
+	applyStatusFilter(&f, c.Query("status"))
 	links, total, err := s.store.List(f)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		serverError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"total": total, "items": links})
 }
 
 func (s *Server) getLink(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "非法 ID"})
+	id, ok := parseID(c)
+	if !ok {
 		return
 	}
 	l, err := s.store.Get(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		serverError(c, err)
 		return
 	}
 	if l == nil {
@@ -124,14 +178,13 @@ func (s *Server) getLink(c *gin.Context) {
 
 // caption 返回该记录推送到频道的卡片文案，供界面预览，保证与实际推送一致。
 func (s *Server) caption(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "非法 ID"})
+	id, ok := parseID(c)
+	if !ok {
 		return
 	}
 	l, err := s.store.Get(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		serverError(c, err)
 		return
 	}
 	if l == nil {
@@ -150,13 +203,12 @@ func plainText(s string) string {
 }
 
 func (s *Server) deleteLink(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "非法 ID"})
+	id, ok := parseID(c)
+	if !ok {
 		return
 	}
 	if err := s.store.Delete(id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		serverError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"deleted": id})
@@ -174,11 +226,13 @@ func (s *Server) importText(c *gin.Context) {
 		return
 	}
 	entries, errs := parser.ParseText(req.Text)
-	c.JSON(http.StatusOK, s.save(entries, errs))
+	c.JSON(http.StatusOK, s.Save(entries, errs))
 }
 
 // importAuto 同时支持 multipart 文件上传与直接提交文本/CSV 内容。
 func (s *Server) importAuto(c *gin.Context) {
+	// 限制请求体上限，避免误传大文件把内存吃满
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<20)
 	if f, err := c.FormFile("file"); err == nil {
 		fh, err := f.Open()
 		if err != nil {
@@ -187,7 +241,7 @@ func (s *Server) importAuto(c *gin.Context) {
 		}
 		defer fh.Close()
 		entries, errs := parser.ParseCSV(fh)
-		c.JSON(http.StatusOK, s.save(entries, errs))
+		c.JSON(http.StatusOK, s.Save(entries, errs))
 		return
 	}
 
@@ -199,11 +253,11 @@ func (s *Server) importAuto(c *gin.Context) {
 	content := string(body)
 	if looksLikeCSV(content) {
 		entries, errs := parser.ParseCSV(strings.NewReader(content))
-		c.JSON(http.StatusOK, s.save(entries, errs))
+		c.JSON(http.StatusOK, s.Save(entries, errs))
 		return
 	}
 	entries, errs := parser.ParseText(content)
-	c.JSON(http.StatusOK, s.save(entries, errs))
+	c.JSON(http.StatusOK, s.Save(entries, errs))
 }
 
 func looksLikeCSV(s string) bool {
@@ -214,7 +268,8 @@ func looksLikeCSV(s string) bool {
 	return strings.Contains(first, "链接") || strings.Count(first, ",") >= 2
 }
 
-type importResult struct {
+// ImportResult 汇总一次导入的结果，命令行与 HTTP 接口共用。
+type ImportResult struct {
 	Total    int               `json:"total"`
 	Inserted int               `json:"inserted"`
 	Skipped  int               `json:"skipped"`
@@ -222,8 +277,9 @@ type importResult struct {
 	IDs      []int64           `json:"ids"`
 }
 
-func (s *Server) save(entries []parser.Entry, errs []parser.RowError) importResult {
-	res := importResult{Total: len(entries) + len(errs), Failed: errs}
+// Save 把解析结果写入数据库，跳过 share_id 重复的记录。
+func (s *Server) Save(entries []parser.Entry, errs []parser.RowError) ImportResult {
+	res := ImportResult{Total: len(entries) + len(errs), Failed: errs}
 	if res.Failed == nil {
 		res.Failed = []parser.RowError{}
 	}

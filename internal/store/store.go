@@ -80,6 +80,26 @@ CREATE TABLE IF NOT EXISTS links (
 CREATE INDEX IF NOT EXISTS idx_links_status ON links(status);
 CREATE INDEX IF NOT EXISTS idx_links_tmdb_id ON links(tmdb_id);
 CREATE INDEX IF NOT EXISTS idx_links_created_at ON links(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS users (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	username      TEXT NOT NULL UNIQUE,
+	password_hash TEXT NOT NULL,
+	display_name  TEXT NOT NULL DEFAULT '',
+	role          TEXT NOT NULL DEFAULT 'operator',
+	enabled       INTEGER NOT NULL DEFAULT 1,
+	last_login_at DATETIME,
+	created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS sessions (
+	token_hash TEXT PRIMARY KEY,
+	user_id    INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 `
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("迁移失败: %w", err)
@@ -120,13 +140,9 @@ func (s *Store) Get(id int64) (*model.Link, error) {
 	return scanLink(row)
 }
 
-// GetByShareID 按分享 ID 读取。
-func (s *Store) GetByShareID(shareID string) (*model.Link, error) {
-	row := s.db.QueryRow(`SELECT `+columns+` FROM links WHERE share_id = ?`, shareID)
-	return scanLink(row)
-}
-
 // List 按条件分页查询，返回数据与总数。
+// limit 只处理 <=0 的默认值，上限由调用方自己收敛：HTTP 列表接口夹到 200，
+// 导出与批量任务则需要一次拿到全部匹配记录。
 func (s *Store) List(f model.ListFilter) ([]model.Link, int, error) {
 	where := []string{"1=1"}
 	args := []any{}
@@ -155,7 +171,7 @@ func (s *Store) List(f model.ListFilter) ([]model.Link, int, error) {
 	}
 
 	limit, offset := f.Limit, f.Offset
-	if limit <= 0 || limit > 200 {
+	if limit <= 0 {
 		limit = 50
 	}
 	if offset < 0 {
@@ -171,13 +187,68 @@ func (s *Store) List(f model.ListFilter) ([]model.Link, int, error) {
 
 	links := make([]model.Link, 0, limit)
 	for rows.Next() {
-		l, err := scanRows(rows)
+		l, err := scanLink(rows)
 		if err != nil {
 			return nil, 0, err
 		}
 		links = append(links, *l)
 	}
 	return links, total, rows.Err()
+}
+
+// idsPlaceholders 为 IN 查询生成占位符与参数。
+func idsPlaceholders[T any](values []T) (string, []any) {
+	ph := make([]string, 0, len(values))
+	args := make([]any, 0, len(values))
+	for _, v := range values {
+		ph = append(ph, "?")
+		args = append(args, v)
+	}
+	return strings.Join(ph, ","), args
+}
+
+// IDsByStatuses 只取 ID 供批量任务使用：状态集合可能覆盖上千条，
+// 没必要把整行数据都读进内存。
+func (s *Store) IDsByStatuses(statuses []model.Status) ([]int64, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	ph, args := idsPlaceholders(statuses)
+	rows, err := s.db.Query(`SELECT id FROM links WHERE status IN (`+ph+`) ORDER BY id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]int64, 0, 256)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// CountByStatus 一次 GROUP BY 取回各状态数量。
+func (s *Store) CountByStatus() (map[model.Status]int, error) {
+	rows, err := s.db.Query(`SELECT status, COUNT(*) FROM links GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := map[model.Status]int{}
+	for rows.Next() {
+		var (
+			st string
+			n  int
+		)
+		if err := rows.Scan(&st, &n); err != nil {
+			return nil, err
+		}
+		counts[model.Status(st)] = n
+	}
+	return counts, rows.Err()
 }
 
 // UpdateStatus 更新状态与错误信息。
@@ -223,26 +294,17 @@ func (s *Store) Delete(id int64) error {
 	return err
 }
 
-// PendingForScrape 取出待刮削的链接，供 M2 的 worker 使用。
-func (s *Store) PendingForScrape(limit int) ([]model.Link, error) {
-	if limit <= 0 {
-		limit = 20
+// DeleteMany 用一条语句批量删除，返回实际删除的行数。
+func (s *Store) DeleteMany(ids []int64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
 	}
-	rows, err := s.db.Query(`SELECT `+columns+` FROM links
-WHERE status IN ('pending','failed','unmatched') ORDER BY id ASC LIMIT ?`, limit)
+	ph, args := idsPlaceholders(ids)
+	res, err := s.db.Exec(`DELETE FROM links WHERE id IN (`+ph+`)`, args...)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer rows.Close()
-	out := []model.Link{}
-	for rows.Next() {
-		l, err := scanRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *l)
-	}
-	return out, rows.Err()
+	return res.RowsAffected()
 }
 
 const columns = `id, share_id, url, code, source, raw_title, title, original_title, year,
@@ -253,7 +315,7 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-func scanLink(row *sql.Row) (*model.Link, error) {
+func scanLink(row scanner) (*model.Link, error) {
 	l := &model.Link{}
 	var createdAt, updatedAt string
 	err := row.Scan(
@@ -265,23 +327,6 @@ func scanLink(row *sql.Row) (*model.Link, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	l.CreatedAt = parseTime(createdAt)
-	l.UpdatedAt = parseTime(updatedAt)
-	return l, nil
-}
-
-func scanRows(rows *sql.Rows) (*model.Link, error) {
-	l := &model.Link{}
-	var createdAt, updatedAt string
-	err := rows.Scan(
-		&l.ID, &l.ShareID, &l.URL, &l.Code, &l.Source, &l.RawTitle, &l.Title,
-		&l.OriginalTitle, &l.Year, &l.MediaType, &l.TMDBID, &l.Overview, &l.Genres,
-		&l.VoteAverage, &l.Runtime, &l.PosterURL, &l.PosterPath, &l.SharedAt,
-		&l.ShareStatus, &l.Status, &l.Error, &l.TGMessageID, &createdAt, &updatedAt,
-	)
 	if err != nil {
 		return nil, err
 	}

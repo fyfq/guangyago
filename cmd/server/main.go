@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/odin/guangya-go/internal/api"
+	"github.com/odin/guangya-go/internal/auth"
 	"github.com/odin/guangya-go/internal/config"
 	"github.com/odin/guangya-go/internal/model"
 	"github.com/odin/guangya-go/internal/notifier"
@@ -69,6 +70,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if err := ensureAdmin(st); err != nil {
+		slog.Error("初始化管理员失败", "err", err)
+	}
+
 	// 运行期可替换的组件（改密钥或代理后重建）
 	var (
 		pipe       *pipeline.Pipeline
@@ -97,27 +102,11 @@ func main() {
 					}
 					return ""
 				}
-				added, dup := 0, 0
-				for _, e := range entries {
-					l := &model.Link{
-						ShareID: e.ShareID, URL: e.URL, Code: e.Code, Source: e.Source,
-						RawTitle: e.RawTitle, Title: e.Title, Year: e.Year, TMDBID: e.TMDBID,
-						Status: model.StatusPending,
-					}
-					ok, err := st.Create(l)
-					if err != nil {
-						continue
-					}
-					if ok {
-						added++
-						if cfg.Pipeline.AutoPush {
-							pipe.Enqueue("scrape", []int64{l.ID})
-						}
-					} else {
-						dup++
-					}
+				res := api.New(st).Save(entries, errs)
+				if len(res.IDs) > 0 && cfg.Pipeline.AutoPush {
+					pipe.Enqueue("scrape", res.IDs)
 				}
-				return fmt.Sprintf("已录入 %d 条，重复 %d 条", added, dup)
+				return fmt.Sprintf("已录入 %d 条，重复 %d 条", res.Inserted, res.Skipped)
 			})
 		}()
 	}
@@ -149,7 +138,12 @@ func main() {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
+	// 不信任任何代理头，ClientIP 直接取 TCP 地址，
+	// 否则客户端可伪造 X-Forwarded-For 绕过登录失败限流。
+	if err := r.SetTrustedProxies(nil); err != nil {
+		slog.Warn("设置可信代理失败", "err", err)
+	}
+	r.Use(gin.Logger(), gin.Recovery(), securityHeaders(), limitBody())
 	api.New(st).WithRuntime(pipe, cfg, *configPath, func(c *config.Config) {
 		build(c)
 		slog.Info("配置已更新并重新加载")
@@ -191,6 +185,73 @@ func main() {
 	slog.Info("已退出")
 }
 
+// securityHeaders 补齐基础安全响应头，并禁止缓存接口响应。
+func securityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		h := c.Writer.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy",
+			"default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; "+
+				"script-src 'self'; connect-src 'self'; font-src 'self' data:; object-src 'none'; "+
+				"base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			h.Set("Cache-Control", "no-store")
+		}
+		c.Next()
+	}
+}
+
+const maxJSONBody = 1 << 20
+
+// limitBody 给普通接口设请求体上限；导入接口在 handler 里另有 32MB 限制。
+func limitBody() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.Body != nil && c.Request.URL.Path != "/api/links/import" {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxJSONBody)
+		}
+		c.Next()
+	}
+}
+
+// ensureAdmin 在用户表为空时创建初始管理员。
+// 默认密码仅用于首次启动，登录后台后应立即修改。
+func ensureAdmin(st *store.Store) error {
+	n, err := st.CountUsers()
+	if err != nil || n > 0 {
+		return err
+	}
+	username := strings.TrimSpace(os.Getenv("ADMIN_USERNAME"))
+	if username == "" {
+		username = "admin"
+	}
+	password := os.Getenv("ADMIN_PASSWORD")
+	useDefault := password == ""
+	if useDefault {
+		password = "admin123"
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return err
+	}
+	u := &model.User{
+		Username:    username,
+		DisplayName: "管理员",
+		Role:        model.RoleAdmin,
+		Enabled:     true,
+	}
+	if err := st.CreateUser(u, hash); err != nil {
+		return err
+	}
+	if useDefault {
+		slog.Warn("已创建初始管理员，请登录后立即修改密码", "username", username, "password", password)
+	} else {
+		slog.Info("已创建初始管理员", "username", username)
+	}
+	return nil
+}
+
 // runImport 解析 CSV 或分享文本并落库，打印统计。
 func runImport(st *store.Store, path string) error {
 	data, err := os.ReadFile(path)
@@ -207,38 +268,10 @@ func runImport(st *store.Store, path string) error {
 		entries, errs = parser.ParseText(content)
 	}
 
-	inserted, skipped := 0, 0
-	for _, e := range entries {
-		l := &model.Link{
-			ShareID:     e.ShareID,
-			URL:         e.URL,
-			Code:        e.Code,
-			Source:      e.Source,
-			RawTitle:    e.RawTitle,
-			Title:       e.Title,
-			Year:        e.Year,
-			TMDBID:      e.TMDBID,
-			SharedAt:    e.SharedAt,
-			ShareStatus: e.ShareStatus,
-			Status:      model.StatusPending,
-		}
-		if e.ShareStatus != "" && e.ShareStatus != "成功" {
-			l.Status = model.StatusReview
-		}
-		ok, err := st.Create(l)
-		if err != nil {
-			errs = append(errs, parser.RowError{Line: e.Line, Raw: e.URL, Err: err.Error()})
-			continue
-		}
-		if ok {
-			inserted++
-		} else {
-			skipped++
-		}
-	}
+	res := api.New(st).Save(entries, errs)
 
-	fmt.Printf("解析 %d 条：新增 %d，重复跳过 %d，失败 %d\n", len(entries)+len(errs), inserted, skipped, len(errs))
-	for _, e := range errs {
+	fmt.Printf("解析 %d 条：新增 %d，重复跳过 %d，失败 %d\n", len(entries)+len(errs), res.Inserted, res.Skipped, len(res.Failed))
+	for _, e := range res.Failed {
 		if e.Line > 0 {
 			fmt.Printf("  第 %d 行失败：%s\n", e.Line, e.Err)
 		} else {

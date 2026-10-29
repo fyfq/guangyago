@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/odin/guangya-go/internal/model"
@@ -11,14 +12,11 @@ import (
 
 // exportLinks 按当前筛选条件导出 CSV（带 BOM，Excel 直接打开不乱码）。
 func (s *Server) exportLinks(c *gin.Context) {
-	f := model.ListFilter{
-		Status:  model.Status(c.Query("status")),
-		Keyword: c.Query("q"),
-		Limit:   10000,
-	}
+	f := model.ListFilter{Keyword: c.Query("q"), Limit: 10000}
+	applyStatusFilter(&f, c.Query("status"))
 	links, _, err := s.store.List(f)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		serverError(c, err)
 		return
 	}
 
@@ -60,6 +58,13 @@ func (cw csvWriter) write(fields []string) {
 }
 
 func quoteCSV(s string) string {
+	// 以 = + - @ 等开头的字段会被 Excel 当公式执行，加前导单引号按文本处理；
+	// 前导空白可能被表格软件忽略，因此跳过空白后再判断。
+	trimmed := strings.TrimLeft(s, " \t\r")
+	first, _ := utf8.DecodeRuneInString(trimmed)
+	if trimmed != "" && strings.ContainsRune("=+-@\t\r", first) {
+		s = "'" + s
+	}
 	if strings.ContainsAny(s, ",\"\n") {
 		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 	}
@@ -68,20 +73,21 @@ func quoteCSV(s string) string {
 
 // stats 返回各状态数量，供页面顶部概览使用。
 func (s *Server) stats(c *gin.Context) {
-	counts := map[string]int{}
+	counts, err := s.store.CountByStatus()
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	// 固定输出全部状态，计数为 0 的也返回，前端无需再补默认值
+	out := make(map[string]int, len(counts))
 	for _, st := range []model.Status{
 		model.StatusPending, model.StatusReview, model.StatusScraping,
 		model.StatusScraped, model.StatusUnmatched, model.StatusPushed,
 		model.StatusPushFailed, model.StatusFailed,
 	} {
-		_, total, err := s.store.List(model.ListFilter{Status: st, Limit: 1})
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		counts[string(st)] = total
+		out[string(st)] = counts[st]
 	}
-	c.JSON(http.StatusOK, counts)
+	c.JSON(http.StatusOK, out)
 }
 
 // batchDelete 批量删除，请求体形如 {"ids":[1,2,3]}。
@@ -93,11 +99,10 @@ func (s *Server) batchDelete(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ids 不能为空"})
 		return
 	}
-	deleted := 0
-	for _, id := range req.IDs {
-		if err := s.store.Delete(id); err == nil {
-			deleted++
-		}
+	deleted, err := s.store.DeleteMany(req.IDs)
+	if err != nil {
+		serverError(c, err)
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
 }

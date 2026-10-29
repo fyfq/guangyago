@@ -1,0 +1,39 @@
+name: guangya
+
+services:
+  app:
+    build:
+      context: .
+      # 构建沙箱默认在 bridge 网络里，看不到宿主机的 127.0.0.1。
+      # 要直接用宿主上的代理出网，就放开下面这行，并把 .env 里写成 BUILD_PROXY=http://127.0.0.1:7890
+      # network: host
+      args:
+        # 构建期代理（拉 npm 包与 Go 模块）。必须是 HTTP 端口，socks5 端口 npm/go 不认。
+        HTTP_PROXY: ${BUILD_PROXY:-}
+        HTTPS_PROXY: ${BUILD_PROXY:-}
+        NO_PROXY: localhost,127.0.0.1,host.docker.internal
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+        GOSUMDB: ${GOSUMDB:-sum.golang.org}
+    image: guangya:latest
+    restart: unless-stopped
+    ports:
+      - "8090:8090" # 左边的号对外，改成自己想用的端口
+    volumes:
+      - ./data:/app/data # 数据库 / 海报 / 配置全在这里，备份与迁移只需搬这一个目录
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # 代理跑在宿主机时，PROXY_ADDR 填 host.docker.internal:7890
+    environment:
+      # 全部可选：留空就用后台「设置」页写进 data/config.yaml 的值
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      TG_BOT_TOKEN: ${TG_BOT_TOKEN:-}
+      GUANGYA_COOKIE: ${GUANGYA_COOKIE:-}
+      PROXY_ADDR: ${PROXY_ADDR:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8090/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

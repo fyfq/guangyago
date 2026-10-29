@@ -3,14 +3,14 @@ import { cva, type VariantProps } from 'class-variance-authority'
 import { cn } from '../../lib/utils'
 
 const button = cva(
-  'inline-flex items-center justify-center gap-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-brand)]',
+  'inline-flex items-center justify-center gap-1.5 rounded-[var(--radius-control)] text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-brand)]',
   {
     variants: {
       variant: {
-        default: 'bg-[var(--color-brand)] text-white hover:bg-blue-700',
-        outline: 'border border-[var(--color-line)] bg-[var(--color-surface)] text-[var(--color-ink)] hover:bg-stone-50',
-        ghost: 'text-[var(--color-muted)] hover:bg-stone-100 hover:text-[var(--color-ink)]',
-        danger: 'bg-[var(--color-bad)] text-white hover:bg-red-700',
+        default: 'bg-[var(--color-brand)] text-white hover:bg-[var(--color-brand-hover)]',
+        outline: 'border border-[var(--color-line-strong)] bg-[var(--color-surface)] text-[var(--color-ink)] hover:bg-[var(--color-surface-hover)]',
+        ghost: 'text-[var(--color-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]',
+        danger: 'bg-[var(--color-bad)] text-white hover:brightness-90',
       },
       size: {
         sm: 'h-8 px-3',

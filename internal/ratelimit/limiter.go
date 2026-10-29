@@ -83,17 +83,6 @@ func (l *Limiter) reserve() (time.Duration, bool) {
 	return d, false
 }
 
-// Rate 返回当前生效的每秒速率，用于界面回显。
-func (l *Limiter) Rate() float64 {
-	if l == nil || !l.enabled {
-		return 0
-	}
-	return l.rate
-}
-
-// Enabled 报告该限流器是否生效。
-func (l *Limiter) Enabled() bool { return l != nil && l.enabled }
-
 // Semaphore 限制同时进行的任务数，用于没有明确 QPS 配额、
 // 但需要控制并发的第三方服务（例如光鸭分享检测）。
 type Semaphore struct {
@@ -120,12 +109,4 @@ func (s *Semaphore) Acquire(ctx context.Context) (func(), error) {
 	case <-ctx.Done():
 		return func() {}, ctx.Err()
 	}
-}
-
-// Size 返回并发上限，0 表示不限。
-func (s *Semaphore) Size() int {
-	if s == nil {
-		return 0
-	}
-	return s.size
 }

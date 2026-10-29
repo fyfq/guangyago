@@ -1,0 +1,22 @@
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+.dockerignore
+README.md
+docs/
+bin/
+data/
+config.yaml
+.env
+*.db
+*.db-shm
+*.db-wal
+*.log
+.DS_Store
+node_modules/
+web/node_modules/
+web/dist/
+# 前端在容器内重新构建，embed 目录先留空
+internal/web/dist/
+.workbuddy/

@@ -5,6 +5,7 @@ import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import Textarea from '../components/ui/Textarea.vue'
 import { api, type ImportResult } from '../lib/api'
+import { toast } from '../lib/toast'
 
 const text = ref('')
 const loading = ref(false)
@@ -21,11 +22,12 @@ async function scrapeImported() {
   if (!result.value?.ids.length) return
   scraping.value = true
   try {
-    await api.scrape(result.value.ids)
+    const res = await api.scrape(result.value.ids)
+    toast.success(`已加入刮削队列 ${res.queued} 条`)
     emit('imported')
     emit('goto', 'scrape')
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '刮削启动失败'
+    toast.error(e instanceof Error ? e.message : '刮削启动失败')
   } finally {
     scraping.value = false
   }
@@ -53,10 +55,15 @@ async function run(fn: () => Promise<ImportResult>) {
   result.value = null
   try {
     result.value = await fn()
-    if (result.value.inserted > 0) {
+    const r = result.value
+    if (r.inserted > 0) {
       text.value = ''
       emit('imported')
+      toast.success(`新增 ${r.inserted} 条${r.skipped ? `，跳过重复 ${r.skipped} 条` : ''}`)
+    } else if (r.skipped > 0) {
+      toast.info(`没有新增记录，${r.skipped} 条已存在`)
     }
+    if (r.failed.length) toast.error(`${r.failed.length} 行解析或入库失败，见右侧明细`)
   } catch (e) {
     error.value = e instanceof Error ? e.message : '导入失败'
   } finally {
@@ -104,21 +111,21 @@ function pickFile() {
     </Card>
 
     <Card title="解析结果" desc="导入后显示新增、跳过与失败明细">
-      <div v-if="!result" class="flex h-40 items-center justify-center text-[13px] text-stone-400">
+      <div v-if="!result" class="flex h-40 items-center justify-center text-[13px] text-[var(--color-faint)]">
         尚无导入记录
       </div>
 
       <div v-else class="space-y-4">
         <div class="grid grid-cols-3 gap-3">
-          <div class="rounded-lg bg-stone-50 p-3">
+          <div class="rounded-lg bg-[var(--color-surface-sunken)] p-3">
             <p class="text-[13px] text-[var(--color-muted)]">新增</p>
             <p class="text-2xl font-medium text-[var(--color-ok)]">{{ result.inserted }}</p>
           </div>
-          <div class="rounded-lg bg-stone-50 p-3">
+          <div class="rounded-lg bg-[var(--color-surface-sunken)] p-3">
             <p class="text-[13px] text-[var(--color-muted)]">重复跳过</p>
             <p class="text-2xl font-medium">{{ result.skipped }}</p>
           </div>
-          <div class="rounded-lg bg-stone-50 p-3">
+          <div class="rounded-lg bg-[var(--color-surface-sunken)] p-3">
             <p class="text-[13px] text-[var(--color-muted)]">失败</p>
             <p class="text-2xl font-medium" :class="result.failed.length ? 'text-[var(--color-bad)]' : ''">
               {{ result.failed.length }}

@@ -39,8 +39,6 @@ func (s *Server) settings(c *gin.Context) {
 				"per_second":         cfg.Rate.TMDB.PerSecond,
 				"burst":              cfg.Rate.TMDB.Burst,
 				"shared_credentials": cfg.Rate.TMDB.SharedCredentials,
-				"effective":          cfg.Rate.TMDB.EffectivePerSecond(),
-				"ceiling":            config.TMDBSoftCeiling,
 			},
 			"telegram": gin.H{
 				"enable":             cfg.Rate.Telegram.Enable,
@@ -48,13 +46,10 @@ func (s *Server) settings(c *gin.Context) {
 				"channel_only":       cfg.Rate.Telegram.ChannelOnly,
 				"shared_credentials": cfg.Rate.Telegram.SharedCredentials,
 				"paid_broadcast":     cfg.Rate.Telegram.PaidBroadcast,
-				"effective_ms":       cfg.Rate.Telegram.EffectiveIntervalMS(),
-				"suggest_ms":         cfg.Rate.Telegram.SuggestIntervalMS(),
 			},
 			"guangya": gin.H{
 				"enable":      cfg.Rate.Guangya.Enable,
 				"concurrency": cfg.Rate.Guangya.Concurrency,
-				"effective":   cfg.Rate.Guangya.EffectiveConcurrency(),
 			},
 		},
 	})

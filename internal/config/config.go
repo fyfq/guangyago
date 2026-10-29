@@ -81,10 +81,8 @@ const (
 	telegramMinIntervalMS = 1000
 	// telegramGroupMinIntervalMS 群组 20 条/分钟换算出的下限。
 	telegramGroupMinIntervalMS = 3000
-	// telegramChannelSuggestMS 官方给出的频道建议节奏。
-	telegramChannelSuggestMS = 1100
-	// TMDBSoftCeiling 是 TMDB 的上层保护阈值（约 40 次/秒，官方称随时可能调整）。
-	TMDBSoftCeiling = 40
+	// tmdbSoftCeiling 是 TMDB 的上层保护阈值（约 40 次/秒，官方称随时可能调整）。
+	tmdbSoftCeiling = 40
 )
 
 // EffectiveIntervalMS 计算 Telegram 实际生效的发送间隔：
@@ -110,17 +108,6 @@ func (r TelegramRate) EffectiveIntervalMS() int {
 	return ms
 }
 
-// SuggestIntervalMS 返回在当前场景下的推荐值，供界面「恢复默认」使用。
-func (r TelegramRate) SuggestIntervalMS() int {
-	if r.ChannelOnly {
-		return telegramChannelSuggestMS
-	}
-	if r.SharedCredentials {
-		return int(float64(DefaultTelegramIntervalMS) * 1.5)
-	}
-	return DefaultTelegramIntervalMS
-}
-
 // EffectivePerSecond 计算 TMDB 实际生效的每秒请求数：
 // 共享凭据时减半，并夹在 [0.1, 软阈值] 之间。
 func (r TMDBRate) EffectivePerSecond() float64 {
@@ -134,8 +121,8 @@ func (r TMDBRate) EffectivePerSecond() float64 {
 	if rate < 0.1 {
 		rate = 0.1
 	}
-	if rate > TMDBSoftCeiling {
-		rate = TMDBSoftCeiling
+	if rate > tmdbSoftCeiling {
+		rate = tmdbSoftCeiling
 	}
 	return rate
 }
@@ -200,9 +187,6 @@ func (c ChatID) Any() any {
 	}
 	return s
 }
-
-// IsSet 判断频道是否已配置。
-func (c ChatID) IsSet() bool { return c.Any() != nil }
 
 type TelegramConfig struct {
 	Token     string `yaml:"token"`

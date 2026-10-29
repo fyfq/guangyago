@@ -8,7 +8,7 @@ const props = defineProps<{ class?: string; title?: string; desc?: string }>()
   <section
     :class="
       cn(
-        'rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] p-5 shadow-[0_1px_2px_rgba(28,25,23,0.04)]',
+        'rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5 shadow-[0_1px_3px_rgba(20,20,20,0.05)]',
         props.class,
       )
     "

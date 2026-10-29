@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Search,
   Download,
@@ -13,16 +13,22 @@ import {
   X,
   Inbox,
   Plus,
+  AlertCircle,
+  RotateCcw,
+  Check,
 } from 'lucide-vue-next'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import Input from '../components/ui/Input.vue'
 import Badge from '../components/ui/Badge.vue'
 import { api, statusMeta, mediaMeta, mediaLabel, type Link } from '../lib/api'
+import { toast } from '../lib/toast'
+import { confirmAction } from '../lib/confirm'
 
 const items = ref<Link[]>([])
 const total = ref(0)
 const loading = ref(false)
+const loadError = ref('')
 const keyword = ref('')
 const status = ref('scraped_set')
 const page = ref(0)
@@ -33,13 +39,15 @@ const mode = ref<'table' | 'grid'>('table')
 const detail = ref<Link | null>(null)
 const acting = ref<number | null>(null)
 
+const drawer = ref<HTMLElement | null>(null)
+
 const props = defineProps<{ initialStatus?: string }>()
 
 const emit = defineEmits<{ changed: []; goto: [tab: string] }>()
 
 // 资源库只承载刮削成功的记录；未刮削的在「刮削队列」页处理
 const filters = [
-  { value: 'scraped_set', label: '全部' },
+  { value: 'scraped_set', label: '全部状态' },
   { value: 'scraped', label: '已刮削' },
   { value: 'pushed', label: '已推送' },
   { value: 'push_failed', label: '推送失败' },
@@ -48,8 +56,13 @@ const filters = [
 const allChecked = computed(() => items.value.length > 0 && selected.value.length === items.value.length)
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
 
+// 请求可能因输入、切页、切筛选而重叠，只让最后一次结果落地
+let loadSeq = 0
+
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
+  loadError.value = ''
   try {
     const res = await api.list({
       q: keyword.value,
@@ -57,26 +70,35 @@ async function load() {
       limit: pageSize,
       offset: page.value * pageSize,
     })
+    if (seq !== loadSeq) return
     items.value = res.items
     total.value = res.total
     selected.value = []
+  } catch (e) {
+    if (seq !== loadSeq) return
+    loadError.value = e instanceof Error ? e.message : '加载失败'
+    items.value = []
+    total.value = 0
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
-let timer: number | undefined
+let loadTimer: number | undefined
+/** 筛选条件变化后合并成一次请求，避免关键词与状态各触发一遍 */
+function scheduleLoad(delay = 150) {
+  window.clearTimeout(loadTimer)
+  loadTimer = window.setTimeout(load, delay)
+}
+
 watch(keyword, () => {
-  window.clearTimeout(timer)
-  timer = window.setTimeout(() => {
-    page.value = 0
-    load()
-  }, 300)
+  page.value = 0
+  scheduleLoad(300)
 })
 
 watch(status, () => {
   page.value = 0
-  load()
+  scheduleLoad()
 })
 
 watch(
@@ -85,41 +107,85 @@ watch(
     if (!v) return
     status.value = v
     page.value = 0
-    load()
+    scheduleLoad()
   },
 )
+
+watch(detail, async (d) => {
+  document.body.style.overflow = d ? 'hidden' : ''
+  if (!d) return
+  await nextTick()
+  drawer.value?.focus()
+})
 
 onMounted(() => {
   if (props.initialStatus) status.value = props.initialStatus
   load()
 })
 
-defineExpose({ load })
+onUnmounted(() => {
+  window.clearTimeout(loadTimer)
+  document.body.style.overflow = ''
+})
 
 function toggleAll() {
   selected.value = allChecked.value ? [] : items.value.map((i) => i.id)
 }
 
-async function removeOne(id: number) {
-  await api.remove(id)
-  detail.value = null
-  emit('changed')
-  load()
+function toggleSelect(id: number) {
+  selected.value = selected.value.includes(id)
+    ? selected.value.filter((x) => x !== id)
+    : [...selected.value, id]
+}
+
+async function removeOne(l: Link) {
+  const ok = await confirmAction({
+    title: '删除这条记录？',
+    message: `「${l.title || l.raw_title || l.url}」会从资源库移除，已推送到频道的内容不受影响。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    await api.remove(l.id)
+    if (detail.value?.id === l.id) detail.value = null
+    toast.success('已删除')
+    emit('changed')
+    await load()
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '删除失败')
+  }
 }
 
 async function removeSelected() {
   if (!selected.value.length) return
-  await api.batchRemove(selected.value)
-  emit('changed')
-  load()
+  const ok = await confirmAction({
+    title: `删除所选 ${selected.value.length} 条记录？`,
+    message: '删除后无法恢复，已推送到频道的内容不受影响。',
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    const ids = selected.value.slice()
+    await api.batchRemove(ids)
+    toast.success(`已删除 ${ids.length} 条`)
+    emit('changed')
+    await load()
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '批量删除失败')
+  }
 }
 
 async function scrapeOne(id: number) {
   acting.value = id
   try {
     await api.scrapeOne(id)
+    toast.info('已加入刮削队列')
     emit('changed')
-    load()
+    await load()
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '刮削启动失败')
   } finally {
     acting.value = null
   }
@@ -129,21 +195,35 @@ async function pushOne(id: number) {
   acting.value = id
   try {
     await api.pushOne(id)
+    toast.info('已加入推送队列')
     emit('changed')
-    load()
+    await load()
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '推送启动失败')
   } finally {
     acting.value = null
   }
 }
 
-function exportCsv() {
+async function exportCsv() {
   exporting.value = true
-  const a = document.createElement('a')
-  a.href = api.exportUrl({ status: status.value, q: keyword.value })
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  window.setTimeout(() => (exporting.value = false), 1500)
+  try {
+    const res = await fetch(api.exportUrl({ status: status.value, q: keyword.value }))
+    if (!res.ok) throw new Error(`导出失败（${res.status}）`)
+    const url = URL.createObjectURL(await res.blob())
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `光鸭资源_${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    toast.success(`已导出 ${total.value} 条`)
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '导出失败')
+  } finally {
+    exporting.value = false
+  }
 }
 
 function go(delta: number) {
@@ -157,7 +237,11 @@ function reset() {
   keyword.value = ''
   status.value = 'scraped_set'
   page.value = 0
-  load()
+  scheduleLoad()
+}
+
+function onDrawerKey(e: KeyboardEvent) {
+  if (e.key === 'Escape') detail.value = null
 }
 
 // 去刮削队列处理未刮削的记录
@@ -171,15 +255,15 @@ function gotoQueue() {
     <template #title>
       <div class="flex items-center justify-between gap-3">
         <div>
-          <span>资源库</span>
+          <h2 class="text-[15px] font-medium">资源库</h2>
           <span class="ml-2 text-[13px] font-normal text-[var(--color-muted)]">
             共 {{ total }} 条 · 刮削完成的资源都在这里，可按推送状态回看
           </span>
         </div>
-        <div class="flex gap-1 rounded-lg bg-stone-100 p-0.5">
+        <div class="flex gap-1 rounded-[var(--radius-control)] bg-[var(--color-surface-sunken)] p-0.5">
           <button
             class="flex items-center gap-1 rounded-md px-2 py-1 text-[13px] transition-colors"
-            :class="mode === 'table' ? 'bg-white shadow-sm' : 'text-[var(--color-muted)]'"
+            :class="mode === 'table' ? 'bg-[var(--color-surface)] shadow-sm' : 'text-[var(--color-muted)]'"
             @click="mode = 'table'"
           >
             <List class="h-3.5 w-3.5" />
@@ -187,7 +271,7 @@ function gotoQueue() {
           </button>
           <button
             class="flex items-center gap-1 rounded-md px-2 py-1 text-[13px] transition-colors"
-            :class="mode === 'grid' ? 'bg-white shadow-sm' : 'text-[var(--color-muted)]'"
+            :class="mode === 'grid' ? 'bg-[var(--color-surface)] shadow-sm' : 'text-[var(--color-muted)]'"
             @click="mode = 'grid'"
           >
             <LayoutGrid class="h-3.5 w-3.5" />
@@ -199,9 +283,10 @@ function gotoQueue() {
 
     <!-- 空库引导 -->
     <div v-if="!loading && !total && !keyword && status === 'scraped_set'" class="py-14 text-center">
-      <Inbox class="mx-auto h-8 w-8 text-stone-300" />
+      <Inbox class="mx-auto h-8 w-8 text-[var(--color-faint)]" />
       <p class="mt-3 text-[13px] text-[var(--color-muted)]">资源库里还没有刮削完成的资源</p>
-      <p class="mt-1 text-[13px] text-stone-400">录入的链接要先在「刮削队列」完成 TMDB 刮削才会进库</p>      <div class="mt-4 flex justify-center gap-2">
+      <p class="mt-1 text-[13px] text-[var(--color-faint)]">录入的链接要先在「刮削队列」完成 TMDB 刮削才会进库</p>
+      <div class="mt-4 flex justify-center gap-2">
         <Button size="sm" @click="emit('goto', 'import')">
           <Plus class="h-4 w-4" />
           去录入
@@ -214,9 +299,21 @@ function gotoQueue() {
     </div>
 
     <template v-else>
+      <div
+        v-if="loadError"
+        class="mb-4 flex items-center gap-2 rounded-lg bg-[var(--color-bad-soft)] px-3 py-2.5 text-[13px] text-[var(--color-bad)]"
+      >
+        <AlertCircle class="h-4 w-4 shrink-0" />
+        <span class="min-w-0 flex-1">加载失败：{{ loadError }}</span>
+        <Button size="sm" variant="outline" @click="load">
+          <RotateCcw class="h-3.5 w-3.5" />
+          重试
+        </Button>
+      </div>
+
       <div class="flex flex-wrap items-center gap-2">
         <div class="relative w-full max-w-xs">
-          <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+          <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-faint)]" />
           <Input v-model="keyword" class="pl-9" placeholder="搜索片名 / 链接 / TMDB ID" />
         </div>
 
@@ -228,7 +325,7 @@ function gotoQueue() {
             :class="
               status === f.value
                 ? 'bg-[var(--color-brand-soft)] text-[var(--color-brand)] font-medium'
-                : 'text-[var(--color-muted)] hover:bg-stone-100'
+                : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-hover)]'
             "
             @click="status = f.value"
           >
@@ -237,7 +334,9 @@ function gotoQueue() {
         </div>
 
         <div class="ml-auto flex items-center gap-2">
-          <Button v-if="keyword || status" variant="ghost" size="sm" @click="reset">清空筛选</Button>
+          <Button v-if="keyword || status !== 'scraped_set'" variant="ghost" size="sm" @click="reset">
+            清空筛选
+          </Button>
           <Button variant="outline" size="sm" :disabled="!selected.length" @click="removeSelected">
             <Trash2 class="h-4 w-4" />
             删除所选 {{ selected.length || '' }}
@@ -258,14 +357,36 @@ function gotoQueue() {
           没有符合条件的记录
         </div>
         <div v-else class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          <button v-for="l in items" :key="l.id" class="group text-left" @click="detail = l">
-            <div
-              class="relative aspect-[2/3] overflow-hidden rounded-lg border border-[var(--color-line)] bg-stone-100 bg-cover bg-center"
-              :style="l.poster_url ? { backgroundImage: `url(${l.poster_url})` } : {}"
-            >
-              <Badge class="absolute left-2 top-2" :class="statusMeta[l.status]?.cls">
-                {{ statusMeta[l.status]?.label ?? l.status }}
-              </Badge>
+          <div v-for="l in items" :key="l.id">
+            <div class="relative">
+              <button class="block w-full text-left" @click="detail = l">
+                <div
+                  class="relative aspect-[2/3] overflow-hidden rounded-lg border border-[var(--color-line)] bg-[var(--color-surface-hover)] bg-cover bg-center"
+                  :style="l.poster_url ? { backgroundImage: `url(${l.poster_url})` } : {}"
+                >
+                  <Badge class="absolute bottom-2 left-2" :class="statusMeta[l.status]?.cls">
+                    {{ statusMeta[l.status]?.label ?? l.status }}
+                  </Badge>
+                </div>
+              </button>
+              <!-- 海报墙也要能多选，否则批量删除只能回到列表视图 -->
+              <label
+                class="absolute right-2 top-2 flex h-6 w-6 cursor-pointer items-center justify-center rounded-[var(--radius-control)] border shadow-sm transition-colors"
+                :class="
+                  selected.includes(l.id)
+                    ? 'border-[var(--color-brand)] bg-[var(--color-brand)] text-white'
+                    : 'border-[var(--color-line-strong)] bg-[var(--color-surface)] text-transparent hover:text-[var(--color-muted)]'
+                "
+                :title="selected.includes(l.id) ? '取消选择' : '选择'"
+              >
+                <input
+                  type="checkbox"
+                  class="sr-only"
+                  :checked="selected.includes(l.id)"
+                  @change="toggleSelect(l.id)"
+                />
+                <Check class="h-3.5 w-3.5" />
+              </label>
             </div>
             <p class="mt-2 truncate text-[13px] font-medium">{{ l.title || l.raw_title || '—' }}</p>
             <p class="flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
@@ -274,7 +395,7 @@ function gotoQueue() {
                 {{ mediaMeta[l.media_type].label }}
               </Badge>
             </p>
-          </button>
+          </div>
         </div>
       </div>
 
@@ -309,7 +430,7 @@ function gotoQueue() {
             <tr
               v-for="l in items"
               :key="l.id"
-              class="cursor-pointer border-b border-[var(--color-line)] last:border-0 hover:bg-stone-50"
+              class="cursor-pointer border-b border-[var(--color-line)] last:border-0 hover:bg-[var(--color-surface-sunken)]"
               @click="detail = l"
             >
               <td class="py-2.5 pr-2" @click.stop>
@@ -317,7 +438,7 @@ function gotoQueue() {
               </td>
               <td class="py-2.5 pr-3">
                 <div
-                  class="h-[42px] w-7 rounded bg-stone-100 bg-cover bg-center"
+                  class="h-[42px] w-7 rounded bg-[var(--color-surface-hover)] bg-cover bg-center"
                   :style="l.poster_url ? { backgroundImage: `url(${l.poster_url})` } : {}"
                 />
               </td>
@@ -328,13 +449,13 @@ function gotoQueue() {
                     :href="l.url"
                     target="_blank"
                     rel="noreferrer"
-                    class="text-stone-400 hover:text-[var(--color-brand)]"
+                    class="text-[var(--color-faint)] hover:text-[var(--color-brand)]"
                     @click.stop
                   >
                     <ExternalLink class="h-3.5 w-3.5" />
                   </a>
                 </div>
-                <p v-if="l.raw_title && l.raw_title !== l.title" class="text-xs text-stone-400">
+                <p v-if="l.raw_title && l.raw_title !== l.title" class="text-xs text-[var(--color-faint)]">
                   {{ l.raw_title }}
                 </p>
               </td>
@@ -354,7 +475,7 @@ function gotoQueue() {
               <td class="py-2.5" @click.stop>
                 <div class="flex items-center gap-1">
                   <button
-                    class="rounded p-1 text-[var(--color-muted)] hover:bg-stone-100 hover:text-[var(--color-brand)] disabled:opacity-40"
+                    class="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-brand)] disabled:opacity-40"
                     title="重新刮削"
                     :disabled="acting === l.id"
                     @click="scrapeOne(l.id)"
@@ -363,7 +484,7 @@ function gotoQueue() {
                     <Sparkles v-else class="h-4 w-4" />
                   </button>
                   <button
-                    class="rounded p-1 text-[var(--color-muted)] hover:bg-stone-100 hover:text-[var(--color-brand)] disabled:opacity-40"
+                    class="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-brand)] disabled:opacity-40"
                     title="推送到频道"
                     :disabled="acting === l.id"
                     @click="pushOne(l.id)"
@@ -371,9 +492,9 @@ function gotoQueue() {
                     <Send class="h-4 w-4" />
                   </button>
                   <button
-                    class="rounded p-1 text-[var(--color-muted)] hover:bg-stone-100 hover:text-[var(--color-bad)]"
+                    class="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-bad)]"
                     title="删除"
-                    @click="removeOne(l.id)"
+                    @click="removeOne(l)"
                   >
                     <Trash2 class="h-4 w-4" />
                   </button>
@@ -394,8 +515,20 @@ function gotoQueue() {
     </template>
 
     <!-- 详情抽屉 -->
-    <div v-if="detail" class="fixed inset-0 z-50 flex justify-end bg-black/20" @click.self="detail = null">
-      <aside class="h-full w-full max-w-md overflow-y-auto bg-[var(--color-surface)] p-5">
+    <div
+      v-if="detail"
+      class="fixed inset-0 z-50 flex justify-end bg-black/20"
+      @click.self="detail = null"
+    >
+      <aside
+        ref="drawer"
+        tabindex="-1"
+        class="h-full w-full max-w-md overflow-y-auto bg-[var(--color-surface)] p-5 outline-none"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="detail.title || detail.raw_title || '资源详情'"
+        @keydown="onDrawerKey"
+      >
         <div class="mb-4 flex items-start justify-between">
           <div class="min-w-0">
             <h3 class="text-[15px] font-medium">{{ detail.title || detail.raw_title }}</h3>
@@ -409,13 +542,17 @@ function gotoQueue() {
               {{ detail.original_title }}
             </p>
           </div>
-          <button class="rounded p-1 text-[var(--color-muted)] hover:bg-stone-100" @click="detail = null">
+          <button
+            class="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-hover)]"
+            aria-label="关闭"
+            @click="detail = null"
+          >
             <X class="h-4 w-4" />
           </button>
         </div>
 
         <div
-          class="mb-4 aspect-[2/3] w-40 overflow-hidden rounded-lg border border-[var(--color-line)] bg-stone-100 bg-cover bg-center"
+          class="mb-4 aspect-[2/3] w-40 overflow-hidden rounded-lg border border-[var(--color-line)] bg-[var(--color-surface-hover)] bg-cover bg-center"
           :style="detail.poster_url ? { backgroundImage: `url(${detail.poster_url})` } : {}"
         />
 
@@ -462,7 +599,7 @@ function gotoQueue() {
           </div>
           <div class="flex gap-2">
             <dt class="w-16 shrink-0 text-[var(--color-muted)]">简介</dt>
-            <dd class="text-stone-600">{{ detail.overview || '—' }}</dd>
+            <dd class="text-[var(--color-muted)]">{{ detail.overview || '—' }}</dd>
           </div>
           <div class="flex gap-2">
             <dt class="w-16 shrink-0 text-[var(--color-muted)]">链接</dt>
@@ -483,7 +620,7 @@ function gotoQueue() {
             <Send class="h-4 w-4" />
             推送
           </Button>
-          <Button size="sm" variant="ghost" @click="removeOne(detail.id)">
+          <Button size="sm" variant="ghost" @click="removeOne(detail)">
             <Trash2 class="h-4 w-4" />
           </Button>
         </div>

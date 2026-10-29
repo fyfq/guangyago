@@ -13,10 +13,24 @@ import (
 	"github.com/odin/guangya-go/internal/scraper"
 )
 
-// Server 通过组合获得管道能力。
-func (s *Server) WithPipeline(p *pipeline.Pipeline) *Server {
-	s.pipe = p
-	return s
+// pickIDs 解析批量请求：显式 ids 优先；否则按状态（缺省时用 fallback）取库里的记录。
+func (s *Server) pickIDs(ids []int64, all bool, raw []string, fallback model.Status) ([]int64, error) {
+	if len(ids) > 0 {
+		return ids, nil
+	}
+	statuses := make([]model.Status, 0, len(raw))
+	for _, r := range raw {
+		if r = strings.TrimSpace(r); r != "" {
+			statuses = append(statuses, model.Status(r))
+		}
+	}
+	if !all && len(statuses) == 0 {
+		return nil, nil
+	}
+	if len(statuses) == 0 {
+		statuses = []model.Status{fallback}
+	}
+	return s.store.IDsByStatuses(statuses)
 }
 
 func (s *Server) scrape(c *gin.Context) {
@@ -25,41 +39,22 @@ func (s *Server) scrape(c *gin.Context) {
 		return
 	}
 	var req struct {
-		IDs      []int64 `json:"ids"`
-		All      bool    `json:"all"`
-		Statuses []model.Status
-		Raw      []string `json:"statuses"`
+		IDs      []int64  `json:"ids"`
+		All      bool     `json:"all"`
+		Statuses []string `json:"statuses"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	// 默认只处理待刮削（pending）；显式传 statuses 时可重试 failed / unmatched 等
-	statuses := req.Statuses
-	for _, r := range req.Raw {
-		if r = strings.TrimSpace(r); r != "" {
-			statuses = append(statuses, model.Status(r))
-		}
-	}
-	ids := req.IDs
-	if len(ids) == 0 {
-		if req.All || len(statuses) > 0 {
-			if len(statuses) == 0 {
-				statuses = []model.Status{model.StatusPending}
-			}
-			links, _, err := s.store.List(model.ListFilter{Statuses: statuses, Limit: 10000})
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			for _, l := range links {
-				ids = append(ids, l.ID)
-			}
-		}
+	ids, err := s.pickIDs(req.IDs, req.All, req.Statuses, model.StatusPending)
+	if err != nil {
+		serverError(c, err)
+		return
 	}
 	if len(ids) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "没有符合状态的记录"})
 		return
 	}
-	n := s.pipe.Enqueue("scrape", ids)
-	c.JSON(http.StatusOK, gin.H{"queued": n})
+	c.JSON(http.StatusOK, gin.H{"queued": s.pipe.Enqueue("scrape", ids)})
 }
 
 // tmdbLookup 查询 TMDB 条目预览，供「补 ID」时先核对再刮削。
@@ -67,10 +62,10 @@ func (s *Server) scrape(c *gin.Context) {
 // 该接口只读 TMDB，不写任何库表。
 func (s *Server) tmdbLookup(c *gin.Context) {
 	var req struct {
-		TMDBID    int64  `json:"tmdb_id" form:"tmdb_id"`
-		MediaType string `json:"media_type" form:"media_type"`
-		Query     string `json:"query" form:"query"`
-		Year      int    `json:"year" form:"year"`
+		TMDBID    int64  `json:"tmdb_id"`
+		MediaType string `json:"media_type"`
+		Query     string `json:"query"`
+		Year      int    `json:"year"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	if req.TMDBID == 0 {
@@ -85,16 +80,12 @@ func (s *Server) tmdbLookup(c *gin.Context) {
 		req.MediaType = c.Query("media_type")
 	}
 
-	cfg := s.cfg
-	if cfg == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "配置未加载"})
+	// 复用管道里的客户端：同一份限流器与连接池，避免预览请求绕开限流
+	if s.pipe == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "刮削服务未启动"})
 		return
 	}
-	client, err := scraper.New(cfg.TMDB, cfg.Storage.PosterDir, &cfg.Proxy, &cfg.Rate.TMDB)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
+	client := s.pipe.Scraper()
 	if client == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "还没有配置 TMDB API Key，无法查询"})
 		return
@@ -129,9 +120,8 @@ func (s *Server) tmdbLookup(c *gin.Context) {
 
 // setTMDB 手动指定 TMDB ID 与类型，重置为待刮削并立即入队。
 func (s *Server) setTMDB(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "非法 ID"})
+	id, ok := parseID(c)
+	if !ok {
 		return
 	}
 	var req struct {
@@ -148,7 +138,7 @@ func (s *Server) setTMDB(c *gin.Context) {
 		mt = model.MediaMovie
 	}
 	if err := s.store.SetTMDBID(id, req.TMDBID, mt); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		serverError(c, err)
 		return
 	}
 	if req.Scrape && s.pipe != nil {
@@ -169,60 +159,60 @@ func (s *Server) push(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 	// 默认推送已刮削待推送的记录；显式传 statuses 时可重推 push_failed
-	statuses := []model.Status{}
-	for _, r := range req.Raw {
-		if r = strings.TrimSpace(r); r != "" {
-			statuses = append(statuses, model.Status(r))
-		}
-	}
-	ids := req.IDs
-	if len(ids) == 0 {
-		if req.Scraped || len(statuses) > 0 {
-			if len(statuses) == 0 {
-				statuses = []model.Status{model.StatusScraped}
-			}
-			links, _, err := s.store.List(model.ListFilter{Statuses: statuses, Limit: 10000})
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			for _, l := range links {
-				ids = append(ids, l.ID)
-			}
-		}
+	ids, err := s.pickIDs(req.IDs, req.Scraped, req.Raw, model.StatusScraped)
+	if err != nil {
+		serverError(c, err)
+		return
 	}
 	if len(ids) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "没有待推送的记录"})
 		return
 	}
-	n := s.pipe.Enqueue("push", ids)
-	c.JSON(http.StatusOK, gin.H{"queued": n})
+	c.JSON(http.StatusOK, gin.H{"queued": s.pipe.Enqueue("push", ids)})
 }
 
 func (s *Server) taskStatus(c *gin.Context) {
 	if s.pipe == nil {
-		c.JSON(http.StatusOK, gin.H{"running": false})
+		c.JSON(http.StatusOK, pipeline.Progress{})
+		return
+	}
+	// 刮削与推送各自有独立进度，带 kind 时只返回那一类
+	if kind := strings.TrimSpace(c.Query("kind")); kind != "" {
+		c.JSON(http.StatusOK, s.pipe.StatusOf(kind))
 		return
 	}
 	c.JSON(http.StatusOK, s.pipe.Status())
 }
 
-func (s *Server) scrapeOne(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "非法 ID"})
+// cancelTasks 停止排队中的任务，kind 留空表示刮削和推送都取消。
+func (s *Server) cancelTasks(c *gin.Context) {
+	if s.pipe == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "任务服务未启动"})
 		return
 	}
-	s.pipe.Enqueue("scrape", []int64{id})
+	var req struct {
+		Kind string `json:"kind"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	kind := strings.TrimSpace(req.Kind)
+	n := s.pipe.Cancel(kind)
+	c.JSON(http.StatusOK, gin.H{"canceled": n, "kind": kind})
+}
+
+// enqueueOne 把单条记录加入指定类型的队列。
+func (s *Server) enqueueOne(c *gin.Context, kind string) {
+	id, ok := parseID(c)
+	if !ok {
+		return
+	}
+	if s.pipe == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "任务服务未启动"})
+		return
+	}
+	s.pipe.Enqueue(kind, []int64{id})
 	c.JSON(http.StatusOK, gin.H{"queued": 1})
 }
 
-func (s *Server) pushOne(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "非法 ID"})
-		return
-	}
-	s.pipe.Enqueue("push", []int64{id})
-	c.JSON(http.StatusOK, gin.H{"queued": 1})
-}
+func (s *Server) scrapeOne(c *gin.Context) { s.enqueueOne(c, "scrape") }
+
+func (s *Server) pushOne(c *gin.Context) { s.enqueueOne(c, "push") }

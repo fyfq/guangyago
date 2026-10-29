@@ -68,4 +68,6 @@ var (
 	PendingScrape = []Status{StatusPending, StatusReview, StatusScraping, StatusUnmatched, StatusFailed}
 	// ScrapedOnly 是刮削成功的全部状态，资源库页专用。
 	ScrapedOnly = []Status{StatusScraped, StatusPushed, StatusPushFailed}
+	// PushQueue 是推送页要看的全部状态：待推送 + 推送失败待重试。
+	PushQueue = []Status{StatusScraped, StatusPushFailed}
 )

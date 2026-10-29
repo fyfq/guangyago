@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   Save,
   CheckCircle2,
@@ -8,13 +8,14 @@ import {
   Database,
   Shield,
   Loader2,
-  XCircle,
   Gauge,
   RotateCcw,
+  Zap,
 } from 'lucide-vue-next'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import Input from '../components/ui/Input.vue'
+import TestResultLine from '../components/TestResult.vue'
 import { api, type Settings, type TestResult } from '../lib/api'
 
 const form = ref({
@@ -87,14 +88,47 @@ const saving = ref(false)
 const saved = ref(false)
 const error = ref('')
 
+const steps = [
+  { title: '录入链接', desc: '粘贴分享文本或上传 CSV，按 shareId 自动去重' },
+  { title: 'TMDB 刮削', desc: '用文件名里的 TMDB ID 直取详情与海报，缺失时按标题搜索' },
+  { title: '推送频道', desc: '先预览卡片，确认后批量推送到 Telegram 频道' },
+  { title: '资源库回看', desc: '查看状态、搜索筛选、导出 CSV、失败重推' },
+]
+
 type Target = 'tmdb' | 'telegram' | 'proxy'
 const testing = ref<Target | null>(null)
 const results = ref<Partial<Record<Target, TestResult>>>({})
+
+// 输入一变，上一次的测试结论就过期了，直接撤掉免得误导
+watch(
+  () => form.value.tmdb_api_key,
+  () => delete results.value.tmdb,
+)
+watch(
+  () => [form.value.tg_token, form.value.chat_id],
+  () => delete results.value.telegram,
+)
+// 代理是 TMDB/Telegram 测试的共同出网路径，改了它三份结论都作废
+watch(
+  () => [
+    form.value.proxy_enable,
+    form.value.proxy_addr,
+    form.value.proxy_username,
+    form.value.proxy_password,
+  ],
+  () => {
+    delete results.value.proxy
+    delete results.value.tmdb
+    delete results.value.telegram
+  },
+)
 
 async function load() {
   try {
     current.value = await api.settings()
     form.value.auto_push = current.value.auto_push
+    // 频道 ID 不是密钥，直接回显；'0' 是历史脏值，按未设置处理
+    form.value.chat_id = current.value.chat_id && current.value.chat_id !== '0' ? current.value.chat_id : ''
     const p = current.value.proxy
     if (p) {
       form.value.proxy_enable = p.enable
@@ -132,12 +166,11 @@ async function runTest(target: Target) {
       if (form.value.tg_token) body.tg_token = form.value.tg_token
       if (form.value.chat_id) body.chat_id = form.value.chat_id.trim()
     }
-    if (target === 'proxy') {
-      body.proxy_enable = form.value.proxy_enable
-      if (form.value.proxy_addr) body.proxy_addr = form.value.proxy_addr
-      if (form.value.proxy_username) body.proxy_username = form.value.proxy_username
-      if (form.value.proxy_password) body.proxy_password = form.value.proxy_password
-    }
+    // 代理是全局出网参数，TMDB 与 Telegram 的测试同样要走它
+    body.proxy_enable = form.value.proxy_enable
+    if (form.value.proxy_addr) body.proxy_addr = form.value.proxy_addr
+    if (form.value.proxy_username) body.proxy_username = form.value.proxy_username
+    if (form.value.proxy_password) body.proxy_password = form.value.proxy_password
     results.value = { ...r, [target]: await api.test(body as never) }
   } catch (e) {
     results.value = {
@@ -202,9 +235,9 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="grid gap-5 lg:grid-cols-[1fr_1fr]">
-    <Card title="密钥与频道" desc="留空表示不修改；填完点测试验证，再保存即时生效">
-      <div class="space-y-4">
+  <div class="grid gap-5 lg:grid-cols-2">
+    <Card class="flex flex-col" title="密钥与频道" desc="留空表示不修改；填完点测试验证，再保存即时生效">
+      <div class="flex flex-1 flex-col gap-4">
         <div>
           <label class="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium">
             <KeyRound class="h-4 w-4" />
@@ -221,6 +254,7 @@ onMounted(load)
             <CheckCircle2 class="h-3.5 w-3.5" />
             已配置
           </p>
+          <TestResultLine :result="results.tmdb" />
         </div>
 
         <div>
@@ -245,6 +279,7 @@ onMounted(load)
             <CheckCircle2 class="h-3.5 w-3.5" />
             已配置
           </p>
+          <TestResultLine :result="results.telegram" />
         </div>
 
         <div>
@@ -291,6 +326,7 @@ onMounted(load)
             <p class="text-xs text-[var(--color-muted)]">
               留空则默认按 socks5 处理；TMDB 与 Telegram 的出网请求都会走这个代理
             </p>
+            <TestResultLine :result="results.proxy" />
           </div>
         </div>
 
@@ -304,22 +340,7 @@ onMounted(load)
           同时写入配置文件，重启后仍然有效
         </label>
 
-        <div v-for="(r, key) in results" :key="key" class="text-[13px]">
-          <div
-            class="flex items-start gap-2 rounded-lg px-3 py-2"
-            :class="r?.ok ? 'bg-[var(--color-ok-soft)] text-[var(--color-ok)]' : 'bg-[var(--color-bad-soft)] text-[var(--color-bad)]'"
-          >
-            <CheckCircle2 v-if="r?.ok" class="mt-0.5 h-4 w-4 shrink-0" />
-            <XCircle v-else class="mt-0.5 h-4 w-4 shrink-0" />
-            <div class="min-w-0">
-              <p class="font-medium">{{ r?.message }}</p>
-              <p v-if="r?.detail" class="mt-0.5 text-xs opacity-80">{{ r.detail }}</p>
-              <p v-if="r?.elapsed_ms" class="mt-0.5 text-xs opacity-70">耗时 {{ r.elapsed_ms }} ms</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="flex items-center gap-3">
+        <div class="mt-auto flex flex-wrap items-center gap-3 border-t border-[var(--color-line)] pt-4">
           <Button :disabled="saving" @click="save">
             <Save class="h-4 w-4" />
             保存配置
@@ -330,6 +351,42 @@ onMounted(load)
           </span>
           <span v-if="error" class="text-[13px] text-[var(--color-bad)]">{{ error }}</span>
         </div>
+      </div>
+    </Card>
+
+    <Card class="flex flex-col" title="使用步骤" desc="从录入到推送的完整流程">
+      <ol class="flex-1 space-y-3 text-[13px]">
+        <li v-for="(s, i) in steps" :key="s.title" class="flex gap-3">
+          <span
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-soft)] text-[12px] font-medium text-[var(--color-brand)]"
+          >{{ i + 1 }}</span>
+          <div>
+            <p class="font-medium">{{ s.title }}</p>
+            <p class="text-[var(--color-muted)]">{{ s.desc }}</p>
+          </div>
+        </li>
+      </ol>
+
+      <div class="mt-5 rounded-lg bg-[var(--color-surface-sunken)] p-3">
+        <p class="mb-2 text-[13px] font-medium text-[var(--color-ink)]">当前配置状态</p>
+        <dl class="grid grid-cols-[4em_1fr] gap-x-3 gap-y-1 text-[13px]">
+          <dt class="text-[var(--color-muted)]">TMDB</dt>
+          <dd :class="current?.tmdb_configured ? 'text-[var(--color-ok)]' : 'text-[var(--color-bad)]'">
+            {{ current?.tmdb_configured ? '已配置' : '未配置' }}
+          </dd>
+          <dt class="text-[var(--color-muted)]">Telegram</dt>
+          <dd :class="current?.telegram_configured ? 'text-[var(--color-ok)]' : 'text-[var(--color-bad)]'">
+            {{ current?.telegram_configured ? '已配置' : '未配置' }}
+          </dd>
+          <dt class="text-[var(--color-muted)]">频道</dt>
+          <dd class="truncate">{{ current?.chat_id && current.chat_id !== '0' ? current.chat_id : '未设置' }}</dd>
+          <dt class="text-[var(--color-muted)]">代理</dt>
+          <dd :class="current?.proxy?.enable ? 'text-[var(--color-ok)]' : 'text-[var(--color-muted)]'">
+            {{ current?.proxy?.enable ? current.proxy.addr || '已启用' : '未启用' }}
+          </dd>
+          <dt class="text-[var(--color-muted)]">Worker</dt>
+          <dd>{{ current?.workers ?? '-' }}</dd>
+        </dl>
       </div>
     </Card>
 
@@ -350,9 +407,9 @@ onMounted(load)
         </div>
       </template>
 
-      <div class="space-y-5">
+      <div class="grid gap-4 lg:grid-cols-3">
         <!-- TMDB -->
-        <div class="rounded-lg border border-[var(--color-line)] p-3">
+        <div class="flex flex-col rounded-lg border border-[var(--color-line)] p-3">
           <div class="flex items-center justify-between">
             <label class="flex items-center gap-1.5 text-[13px] font-medium">
               <Gauge class="h-4 w-4" />
@@ -377,17 +434,17 @@ onMounted(load)
             <input v-model="rate.tmdb_shared" type="checkbox" />
             同一 Key 还被其他应用共用（自动减半）
           </label>
-          <p class="mt-2 text-xs text-[var(--color-muted)]">
+          <p class="mt-auto pt-2 text-xs text-[var(--color-muted)]">
             官方保护阈值约 40 次/秒（软限制，随时可能调整）；默认 4 次/秒，留出十倍余量。
             收到 429 会按 Retry-After 自动退让。当前生效：{{ tmdbEffective }} 次/秒
           </p>
         </div>
 
         <!-- Telegram -->
-        <div class="rounded-lg border border-[var(--color-line)] p-3">
+        <div class="flex flex-col rounded-lg border border-[var(--color-line)] p-3">
           <div class="flex items-center justify-between">
             <label class="flex items-center gap-1.5 text-[13px] font-medium">
-              <Gauge class="h-4 w-4" />
+              <Send class="h-4 w-4" />
               Telegram 发送间隔
             </label>
             <label class="flex items-center gap-1.5 text-[13px] text-[var(--color-muted)]">
@@ -415,7 +472,7 @@ onMounted(load)
               </label>
             </div>
           </div>
-          <p class="mt-2 text-xs text-[var(--color-muted)]">
+          <p class="mt-auto pt-2 text-xs text-[var(--color-muted)]">
             官方要求同一会话不超过 1 条/秒、群组不超过 20 条/分钟。默认 3100ms ≈ 19 条/分钟；
             仅频道可按官方建议调到 1100ms。海报失败后的文本回退同样计入限流。
             当前生效：{{ tgEffective }} ms（约 {{ tgPerMinute }} 条/分钟）
@@ -423,10 +480,10 @@ onMounted(load)
         </div>
 
         <!-- 光鸭 -->
-        <div class="rounded-lg border border-[var(--color-line)] p-3">
+        <div class="flex flex-col rounded-lg border border-[var(--color-line)] p-3">
           <div class="flex items-center justify-between">
             <label class="flex items-center gap-1.5 text-[13px] font-medium">
-              <Gauge class="h-4 w-4" />
+              <Zap class="h-4 w-4" />
               光鸭分享检测
             </label>
             <label class="flex items-center gap-1.5 text-[13px] text-[var(--color-muted)]">
@@ -440,54 +497,10 @@ onMounted(load)
               <Input v-model.number="rate.gy_concurrency" type="number" min="1" max="16" class="mt-1" />
             </label>
           </div>
-          <p class="mt-2 text-xs text-[var(--color-muted)]">
+          <p class="mt-auto pt-2 text-xs text-[var(--color-muted)]">
             光鸭尚未公布官方配额，保守限制并发；当前 {{ rate.gy_enable ? rate.gy_concurrency : '不限' }}
           </p>
         </div>
-      </div>
-    </Card>
-
-    <Card title="使用步骤" desc="从录入到推送的完整流程">
-      <ol class="space-y-3 text-[13px]">
-        <li class="flex gap-3">
-          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-soft)] text-[12px] font-medium text-[var(--color-brand)]">1</span>
-          <div>
-            <p class="font-medium">录入链接</p>
-            <p class="text-[var(--color-muted)]">粘贴分享文本或上传 CSV，按 shareId 自动去重</p>
-          </div>
-        </li>
-        <li class="flex gap-3">
-          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-soft)] text-[12px] font-medium text-[var(--color-brand)]">2</span>
-          <div>
-            <p class="font-medium">TMDB 刮削</p>
-            <p class="text-[var(--color-muted)]">用文件名里的 TMDB ID 直取详情与海报，缺失时按标题搜索</p>
-          </div>
-        </li>
-        <li class="flex gap-3">
-          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-soft)] text-[12px] font-medium text-[var(--color-brand)]">3</span>
-          <div>
-            <p class="font-medium">推送频道</p>
-            <p class="text-[var(--color-muted)]">先预览卡片，确认后批量推送到 Telegram 频道</p>
-          </div>
-        </li>
-        <li class="flex gap-3">
-          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-soft)] text-[12px] font-medium text-[var(--color-brand)]">4</span>
-          <div>
-            <p class="font-medium">资源库回看</p>
-            <p class="text-[var(--color-muted)]">查看状态、搜索筛选、导出 CSV、失败重推</p>
-          </div>
-        </li>
-      </ol>
-
-      <div class="mt-5 rounded-lg bg-stone-50 p-3 text-[13px] text-[var(--color-muted)]">
-        <p class="mb-1 font-medium text-[var(--color-ink)]">当前配置状态</p>
-        <p>TMDB：{{ current?.tmdb_configured ? '已配置' : '未配置' }}</p>
-        <p>Telegram：{{ current?.telegram_configured ? '已配置' : '未配置' }}</p>
-        <p>频道：{{ current?.chat_id && current.chat_id !== '0' ? current.chat_id : '未设置' }}</p>
-        <p>
-          代理：{{ current?.proxy?.enable ? (current.proxy.addr || '已启用') : '未启用' }}
-        </p>
-        <p>并发 Worker：{{ current?.workers ?? '-' }}</p>
       </div>
     </Card>
   </div>

@@ -9,6 +9,7 @@ import {
   Inbox,
   Copy,
   ExternalLink,
+  LogIn,
   RotateCcw,
   Star,
   CalendarDays,
@@ -374,9 +375,10 @@ onUnmounted(() => {
             <p v-if="branding.site_subtitle" class="text-xs leading-tight text-[var(--color-muted)]">{{ branding.site_subtitle }}</p>
           </div>
         </div>
-        <p class="text-[13px] text-[var(--color-muted)]">
-          已收录 <span class="font-medium text-[var(--color-ink)]">{{ stats?.library_total ?? total }}</span> 部
-        </p>
+        <a href="/admin" class="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-2 text-[13px] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-brand)]">
+          <LogIn class="h-4 w-4" />
+          登录
+        </a>
       </div>
     </header>
 

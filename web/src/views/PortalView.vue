@@ -171,6 +171,16 @@ watch(detail, (d) => {
 
 onMounted(async () => {
   document.title = '光鸭 GO · 资源库'
+  // 未安装时跳转到安装向导
+  try {
+    const status = await api.setupStatus()
+    if (!status.installed) {
+      location.replace('/setup')
+      return
+    }
+  } catch {
+    // 接口异常继续
+  }
   window.addEventListener('keydown', onKey)
   load()
 })

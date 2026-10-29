@@ -52,11 +52,14 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # latest 只由正式发版 tag 推进，main 上的验证构建不会覆盖它
           tags: |
             type=ref,event=branch
-            type=ref,event=tag
-            type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build & push
         uses: docker/build-push-action@v6

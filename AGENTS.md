@@ -143,3 +143,42 @@ git diff --cached --stat    # 单次 diff 控制在 300 行内
 - [ ] `target="_blank"` 是不是带 `rel="noopener noreferrer"`？
 - [ ] 有没有 5 行以上复制粘贴？
 - [ ] 单元测试覆盖新逻辑的关键分支（成功/失败/边界各一条）？
+
+## 九、分支、版本与镜像
+
+单人维护，分支越少越好。
+
+### 分支
+
+| 分支 | 规则 |
+|---|---|
+| `main` | 唯一长期分支，始终可部署。小改动（<300 行、不碰 schema）直接推 |
+| `feat/<名>` `fix/<名>` | 仅在超过 300 行、涉及 schema 变更或需要灰度时开；合并回 `main` 后删除 |
+
+不设 `develop` / `release` / `hotfix`，回滚靠 tag 而不是分支。
+
+### 提交信息
+
+统一前缀：`feat:` `fix:` `docs:` `ci:` `refactor:` `chore:`，冒号后中文描述。
+
+### Tag（SemVer）
+
+`v<MAJOR>.<MINOR>.<PATCH>`，只打在 `main` 上、CI 已通过的提交。预发布用 `v2.1.0-rc.1`。
+
+- **MAJOR**：升级需人工介入（迁移不可回退、配置结构不兼容）
+- **MINOR**：新功能，或 schema 变更但启动时自动迁移
+- **PATCH**：bug 修复、文案、依赖小版本
+
+### 镜像 tag
+
+| 触发 | 产出 | 说明 |
+|---|---|---|
+| push `main` | `main`、`sha-<7>` | 验证构建，不动 `latest` |
+| push `v*` | `v2.1.0`、`2.1`、`latest` | `latest` 只由正式 tag 推进 |
+| 手动 dispatch | `edge` | 临时验证，可随时覆盖 |
+
+部署固定版本号（`ghcr.io/fyfq/guangyago:v2.1.0`），回滚只改这一行；拉 `latest` 等于"最近一次正式发版"。
+
+### 构建触发
+
+纯文档提交（`**.md`、`docs/**`、`LICENSE`、`.gitignore`）不触发镜像构建；同分支并发会自动取消旧构建。推送前先判断本次改动是否值得跑一次 amd64+arm64 构建。

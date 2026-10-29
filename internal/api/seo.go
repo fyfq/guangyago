@@ -34,11 +34,11 @@ Sitemap: %s/sitemap.xml
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(content))
 }
 
-// sitemapXML 动态生成站点地图，包含门户首页和所有已推送资源
+// sitemapXML 动态生成站点地图，包含门户首页和所有已收录资源
 func (s *Server) sitemapXML(c *gin.Context) {
 	baseURL := s.getBaseURL(c)
 
-	// 获取所有已推送的资源
+	// 获取所有已收录的资源
 	items, _, err := s.store.ListPublic(model.PublicFilter{
 		Sort:  "new",
 		Limit: 5000, // sitemap 最多收录 5000 条

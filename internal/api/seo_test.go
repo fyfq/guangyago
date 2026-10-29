@@ -45,6 +45,20 @@ func seedPushedLink(t *testing.T, st *store.Store, scraped *model.Link) int64 {
 	return l.ID
 }
 
+// seedScrapedLink 建一条只完成刮削、还没推送到频道的资源；刮削成功即算收录。
+func seedScrapedLink(t *testing.T, st *store.Store, scraped *model.Link) int64 {
+	t.Helper()
+	l := &model.Link{ShareID: "share-" + scraped.Title, URL: "https://guangya.com/s/abc", Title: scraped.Title}
+	ok, err := st.Create(l)
+	if err != nil || !ok {
+		t.Fatalf("Create: ok=%v err=%v", ok, err)
+	}
+	if err := st.UpdateScraped(l.ID, scraped); err != nil {
+		t.Fatalf("UpdateScraped: %v", err)
+	}
+	return l.ID
+}
+
 func seoCtx(target string) *gin.Context {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodGet, target, nil)
@@ -156,13 +170,18 @@ func TestRequestedPublicItem(t *testing.T) {
 	if got := s.requestedPublicItem(seoCtx("/?id=abc")); got != nil {
 		t.Errorf("非法 id 应返回 nil，实际 %+v", got)
 	}
-	// 未推送的记录不在门户可见范围内
-	pending := &model.Link{ShareID: "share-pending", Title: "待推送"}
+	// 刮削成功但还没推送的记录同样已收录
+	scrapedID := seedScrapedLink(t, st, &model.Link{Title: "未推送的新片", Year: 2026, MediaType: model.MediaMovie})
+	if got := s.requestedPublicItem(seoCtx("/?id=" + itoa(scrapedID))); got == nil || got.Title != "未推送的新片" {
+		t.Errorf("待推送资源应已收录，实际 %+v", got)
+	}
+	// 还没刮削的记录不在门户可见范围内
+	pending := &model.Link{ShareID: "share-pending", Title: "待刮削"}
 	if ok, err := st.Create(pending); err != nil || !ok {
 		t.Fatalf("Create pending: %v %v", ok, err)
 	}
 	if got := s.requestedPublicItem(seoCtx("/?id=" + itoa(pending.ID))); got != nil {
-		t.Errorf("未推送资源应返回 nil，实际 %+v", got)
+		t.Errorf("未刮削资源应返回 nil，实际 %+v", got)
 	}
 }
 

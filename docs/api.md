@@ -82,7 +82,7 @@
 同一 IP 或同一用户名连续 5 次失败 → `429 {"error":"尝试次数过多，请 5 分钟后再试"}`。
 
 ### `GET /api/portal/links`
-公开门户列表，只含 `status='pushed'`。
+公开门户列表。收录口径是「刮削成功即入库」：`status IN ('scraped','pushed','push_failed')`，推送只是发布到 Telegram 频道，不影响门户可见性。
 
 | 查询参数 | 默认 | 说明 |
 | --- | --- | --- |
@@ -104,7 +104,7 @@
 ```
 
 ### `GET /api/portal/link/:id`
-单条已推送资源（`PublicLink`），供门户 `/?id=<n>` 深链直接打开详情。未收录或未推送 → `404 {"error":"资源不存在"}`；`id` 非法 → `400`。
+单条已收录资源（`PublicLink`），供门户 `/?id=<n>` 深链直接打开详情。未收录（还没刮削成功）→ `404 {"error":"资源不存在"}`；`id` 非法 → `400`。
 
 ```json
 { "id": 42, "title": "千与千寻", "original_title": "千と千尋の神隠し", "year": 2001,
@@ -128,7 +128,7 @@ Sitemap: https://gy.example.com/sitemap.xml
 ```
 
 ### `GET /sitemap.xml`
-XML（`Content-Type: application/xml`）。收录首页与全部已推送记录（`/?id=<n>`，上限 5000 条）。域名取 `seo.base_url`，未配置则按请求头推断（`X-Forwarded-Proto=https` 或 TLS 为 https）。
+XML（`Content-Type: application/xml`）。收录首页与全部已收录记录（`/?id=<n>`，即刮削成功的记录，上限 5000 条）。域名取 `seo.base_url`，未配置则按请求头推断（`X-Forwarded-Proto=https` 或 TLS 为 https）。
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -157,7 +157,7 @@ XML（`Content-Type: application/xml`）。收录首页与全部已推送记录�
 ```
 
 ### `GET /api/structured-data/:id`
-单条资源的 Schema.org（`media_type=tv` → `TVSeries`，否则 `Movie`）。仅 `pushed` 记录，记录不存在 → `404 {"error":"资源不存在"}`；`id` 非数字 → `400 {"error":"非法 ID"}`。
+单条资源的 Schema.org（`media_type=tv` → `TVSeries`，否则 `Movie`）。仅已收录（刮削成功）记录，记录不存在 → `404 {"error":"资源不存在"}`；`id` 非数字 → `400 {"error":"非法 ID"}`。
 
 ```json
 {
@@ -180,7 +180,7 @@ XML（`Content-Type: application/xml`）。收录首页与全部已推送记录�
 > 可选字段按数据有无出现：`alternateName` 仅在原名与片名不同时；`description` / `image` / `year` / `aggregateRating` / `duration` / `genre` / `sameAs` 在对应值 >0 或非空时才输出。`datePublished` 由 `shared_at` 归一成 ISO 日期（`2006-01-02`），`shared_at` 为空时整个字段省略。
 
 ### `GET /?id=<n>`（门户深链）
-首页 HTML 由服务端渲染，`?id=` 命中已推送记录时，`</head>` 前注入该资源自己的标签，并删除模板里的站点级 `title` / `description` / `og:` / `twitter:`，保证同名标签全局唯一：
+首页 HTML 由服务端渲染，`?id=` 命中已收录记录（刮削成功，含待推送与推送失败）时，`</head>` 前注入该资源自己的标签，并删除模板里的站点级 `title` / `description` / `og:` / `twitter:`，保证同名标签全局唯一：
 
 ```html
 <link rel="canonical" href="https://gy.example.com/?id=42" />
@@ -193,7 +193,7 @@ XML（`Content-Type: application/xml`）。收录首页与全部已推送记录�
 <script id="structured-data" data-item-id="42" type="application/ld+json">{ "@type": "Movie", … }</script>
 ```
 
-- `id` 缺失、非法或记录未推送时，退回站点级标签，页面仍是可用的列表页。
+- `id` 缺失、非法或记录还没刮削成功时，退回站点级标签，页面仍是可用的列表页。
 - 标签值全部经 `html.EscapeString` 转义，JSON-LD 由 `json.Marshal` 转义尖括号，不引入内联脚本。
 - 门户 URL 与页面状态双向绑定：`?id` 详情、`?q` 关键词、`?media_type`、`?year`、`?sort`（打开详情用 `pushState`，改筛选只 `replaceState`）。前端挂载时按 URL 回填，`data-item-id` 命中当前资源时不再重复请求 `/api/structured-data/:id`。
 - `canonical` 对带 `id` 的请求只保留 `id`，避免 `?id=42&q=x` 这类组合被规范到列表页；`sitemap.xml` 的 `lastmod` 与 `datePublished` 用同一个 `schemaDate`。

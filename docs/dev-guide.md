@@ -75,7 +75,7 @@
 ```
 
 - 界面按「状态集合」分组，定义在 `internal/model/link.go:66-73`：`PendingScrape`（刮削队列）、`ScrapedOnly`（资源库）、`PushQueue`（推送页）。新增状态时这三处和 `web/src/lib/api.ts` 的 `statusMeta` 必须同步。
-- 门户只读 `status='pushed'` 的记录，且只暴露 `model.PublicLink` 的最小字段集（不含内部状态与错误）。
+- 门户收录口径是「刮削成功即入库」：`internal/store/public.go` 的 `publicWhere` = `status IN ('scraped','pushed','push_failed')`，与 `ScrapedOnly` 同集合（SQL 里是字面量，改状态时两处一起改）。推送只是发布到频道，不再决定门户可见性；`ListPublic`/`PublicStats`/`GetPublic` 都走这个常量，`sitemap.xml` 与 `/?id` 注入因此自动跟着变。门户只暴露 `model.PublicLink` 的最小字段集（不含内部状态与错误）。
 - `users` / `sessions` / `login_attempts` / `schema_meta`：会话外键 `ON DELETE CASCADE`，删账号即清会话。
 
 ## 5. 流水线
@@ -125,9 +125,9 @@
 
 ## 8. SEO 与 Google 录入
 
-- `robots.txt` / `sitemap.xml` / `GET /api/structured-data[/:id]` 由服务端动态生成（`internal/api/seo.go`）。sitemap 收录 `/?id=<n>`，上限 5000 条。
+- `robots.txt` / `sitemap.xml` / `GET /api/structured-data[/:id]` 由服务端动态生成（`internal/api/seo.go`）。sitemap 收录 `/?id=<n>`，上限 5000 条。三者的可见范围都走 `store.publicWhere`（刮削成功即收录），不另判推送状态。
 - 域名解析顺序：`seo.base_url` 优先，否则按请求 TLS 与 `Host` 推断。**放在反向代理或多域名环境里必须固定 `base_url`**，否则 sitemap 会写成内网地址。
-- `WriteIndex` 在返回首页 HTML 时把 `<meta name="google-site-verification">` 和 `<link rel="canonical">` 注入 `<head>`；请求带 `?id=<n>` 且记录已推送时，再注入该资源自己的 `title` / `description` / `og:` / `twitter:` / JSON-LD，并删掉模板里的站点级同类标签，避免同名标签重复。必须走服务端注入：CSP 拦内联脚本，爬虫也读不到前端 JS 补的标签。`/admin*`、`/login`、`/setup` 不生成 canonical。
+- `WriteIndex` 在返回首页 HTML 时把 `<meta name="google-site-verification">` 和 `<link rel="canonical">` 注入 `<head>`；请求带 `?id=<n>` 且记录已收录（刮削成功）时，再注入该资源自己的 `title` / `description` / `og:` / `twitter:` / JSON-LD，并删掉模板里的站点级同类标签，避免同名标签重复。必须走服务端注入：CSP 拦内联脚本，爬虫也读不到前端 JS 补的标签。`/admin*`、`/login`、`/setup` 不生成 canonical。
 - 门户把页面状态绑到查询串（`?id`/`?q`/`?media_type`/`?year`/`?sort`），`PortalView` 挂载时 `applyURL()` 回填、`popstate` 时重新回填：打开详情用 `pushState`（返回键先关详情），改筛选只 `replaceState`（不塞历史）。所以 sitemap 里的 `/?id=<n>` 是能被爬虫打开的真实页面，而不是一串回落到空壳首页的 URL。
 - 验证码只允许 `^[A-Za-z0-9_-]{10,120}$`，不合法直接 400——这是防 HTML 注入的硬约束，放宽前想清楚。
 - 后台 SEO 页（`web/src/views/SEOView.vue`）：填验证码、复制 meta 标签、拉一次首页原始 HTML 自检标签是否生效、给出 Search Console 深链与提交步骤。

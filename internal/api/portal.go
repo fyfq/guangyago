@@ -40,7 +40,7 @@ func portalFilter(c *gin.Context) (model.PublicFilter, error) {
 	}, nil
 }
 
-// portalLinks 是公开的资源门户列表，只读且只看已推送的记录。
+// portalLinks 是公开的资源门户列表，只读且只看刮削成功（已收录）的记录。
 func (s *Server) portalLinks(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "24"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
@@ -85,7 +85,7 @@ func (s *Server) portalStats(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
-// portalLink 返回单条已推送资源，供 /?id=<n> 深链直接打开详情。
+// portalLink 返回单条已收录资源，供 /?id=<n> 深链直接打开详情。
 func (s *Server) portalLink(c *gin.Context) {
 	id, ok := parseID(c)
 	if !ok {

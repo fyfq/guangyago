@@ -7,8 +7,9 @@ import (
 	"github.com/odin/guangya-go/internal/model"
 )
 
-// 门户只展示已推送成功的记录，按分享时间倒序时把空值排到最后。
-const publicWhere = `status = 'pushed'`
+// 刮削成功即视为收录，推送只是发布到频道的动作，不影响门户可见性。
+// 集合与 model.ScrapedOnly 保持一致，新增状态时两处同步。
+const publicWhere = `status IN ('scraped', 'pushed', 'push_failed')`
 
 const publicColumns = `id, title, original_title, year, media_type, tmdb_id, overview, genres,
 vote_average, runtime, poster_url, url, code, shared_at`
@@ -138,11 +139,11 @@ func (s *Store) PublicStats(f model.PublicFilter) (model.PublicStats, error) {
 	return out, rows.Err()
 }
 
-// GetPublic 按 ID 查询单条已推送资源
+// GetPublic 按 ID 查询单条已收录资源。
 func (s *Store) GetPublic(id int64) (*model.PublicLink, error) {
 	var p model.PublicLink
 	err := s.db.QueryRow(
-		`SELECT `+publicColumns+` FROM links WHERE id = ? AND status = 'pushed'`, id,
+		`SELECT `+publicColumns+` FROM links WHERE id = ? AND `+publicWhere, id,
 	).Scan(
 		&p.ID, &p.Title, &p.OriginalTitle, &p.Year, &p.MediaType, &p.TMDBID,
 		&p.Overview, &p.Genres, &p.VoteAverage, &p.Runtime, &p.PosterURL,

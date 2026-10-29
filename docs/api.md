@@ -1,6 +1,6 @@
 # 光鸭 GO 接口文档
 
-覆盖 `internal/api` 当前注册的全部路由。生成时间 2026-10-29，对应提交 `14cfbd0`。改接口请同步更新本文（维护清单见 [docs/dev-guide.md](dev-guide.md#12-维护清单)）。
+覆盖 `internal/api` 当前注册的全部路由。最后核对 2026-10-29，对应提交 `81655f8`。改接口请同步更新本文（维护清单见 [docs/dev-guide.md](dev-guide.md#12-维护清单)）。
 
 ## 约定
 
@@ -105,14 +105,68 @@
 ### `GET /robots.txt`
 纯文本。放行 `/`，屏蔽 `/admin`、`/login`、`/setup`、`/api/`，并声明 Sitemap 地址。
 
+```
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /login
+Disallow: /setup
+Disallow: /api/
+
+Sitemap: https://gy.example.com/sitemap.xml
+```
+
 ### `GET /sitemap.xml`
-XML。收录首页与全部已推送记录（`/?id=<n>`，上限 5000 条）。域名取 `seo.base_url`，未配置则按请求头推断。
+XML（`Content-Type: application/xml`）。收录首页与全部已推送记录（`/?id=<n>`，上限 5000 条）。域名取 `seo.base_url`，未配置则按请求头推断（`X-Forwarded-Proto=https` 或 TLS 为 https）。
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://gy.example.com/</loc><changefreq>daily</changefreq><priority>1</priority></url>
+  <url><loc>https://gy.example.com/?id=42</loc><lastmod>2026-10-01</lastmod><changefreq>monthly</changefreq><priority>0.8</priority></url>
+</urlset>
+```
 
 ### `GET /api/structured-data`
-站点级 Schema.org（`WebSite` + `SearchAction`），由门户注入 `<head>`。
+站点级 Schema.org（`WebSite` + `SearchAction`），由门户注入 `<head>`。`name` 取 `seo.site_name`，缺省「光鸭 GO」。
+
+```json
+{
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  "name": "光鸭 GO",
+  "url": "https://gy.example.com",
+  "description": "光鸭 GO 资源库 - 网盘资源分享平台",
+  "potentialAction": {
+    "@type": "SearchAction",
+    "target": "https://gy.example.com/?q={search_term_string}",
+    "query-input": "required name=search_term_string"
+  }
+}
+```
 
 ### `GET /api/structured-data/:id`
-单条资源的 Schema.org（`Movie` / `TVSeries`）。仅 `pushed` 记录，否则 `404`。
+单条资源的 Schema.org（`media_type=tv` → `TVSeries`，否则 `Movie`）。仅 `pushed` 记录，记录不存在 → `404 {"error":"资源不存在"}`；`id` 非数字 → `400 {"error":"非法 ID"}`。
+
+```json
+{
+  "@context": "https://schema.org",
+  "@type": "TVSeries",
+  "name": "致命女人",
+  "url": "https://gy.example.com/?id=42",
+  "datePublished": "2019-08-15 10:00:00",
+  "alternateName": "Why Women Kill",
+  "description": "……",
+  "image": "https://image.tmdb.org/t/p/w500/xxx.jpg",
+  "year": 2019,
+  "aggregateRating": { "@type": "AggregateRating", "ratingValue": 7.8, "bestRating": 10, "worstRating": 0 },
+  "duration": "PT50M",
+  "genre": ["犯罪", "剧情"],
+  "sameAs": "https://www.themoviedb.org/tv/20851"
+}
+```
+
+> 可选字段按数据有无出现：`alternateName` 仅在原名与片名不同时；`description` / `image` / `year` / `aggregateRating` / `duration` / `genre` / `sameAs` 在对应值 >0 或非空时才输出。
 
 ---
 

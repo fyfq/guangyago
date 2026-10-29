@@ -77,6 +77,7 @@ func (s *Server) Register(r *gin.Engine) {
 	portal := r.Group("/api/portal")
 	{
 		portal.GET("/links", s.portalLinks)
+		portal.GET("/link/:id", s.portalLink)
 		portal.GET("/stats", s.portalStats)
 	}
 

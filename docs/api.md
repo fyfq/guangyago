@@ -103,6 +103,16 @@
   "years": [ { "year": 2024, "count": 7 } ] }
 ```
 
+### `GET /api/portal/link/:id`
+单条已推送资源（`PublicLink`），供门户 `/?id=<n>` 深链直接打开详情。未收录或未推送 → `404 {"error":"资源不存在"}`；`id` 非法 → `400`。
+
+```json
+{ "id": 42, "title": "千与千寻", "original_title": "千と千尋の神隠し", "year": 2001,
+  "media_type": "movie", "tmdb_id": 129, "overview": "…", "genres": "动画 / 奇幻",
+  "vote_average": 8.5, "runtime": 125, "poster_url": "https://image.tmdb.org/…",
+  "url": "https://www.guangyapan.com/s/…", "code": "abcd", "shared_at": "2026-10-27 16:37:34" }
+```
+
 ### `GET /robots.txt`
 纯文本。放行 `/`，屏蔽 `/admin`、`/login`、`/setup`、`/api/`，并声明 Sitemap 地址。
 
@@ -155,7 +165,7 @@ XML（`Content-Type: application/xml`）。收录首页与全部已推送记录�
   "@type": "TVSeries",
   "name": "致命女人",
   "url": "https://gy.example.com/?id=42",
-  "datePublished": "2019-08-15 10:00:00",
+  "datePublished": "2019-08-15",
   "alternateName": "Why Women Kill",
   "description": "……",
   "image": "https://image.tmdb.org/t/p/w500/xxx.jpg",
@@ -167,7 +177,26 @@ XML（`Content-Type: application/xml`）。收录首页与全部已推送记录�
 }
 ```
 
-> 可选字段按数据有无出现：`alternateName` 仅在原名与片名不同时；`description` / `image` / `year` / `aggregateRating` / `duration` / `genre` / `sameAs` 在对应值 >0 或非空时才输出。
+> 可选字段按数据有无出现：`alternateName` 仅在原名与片名不同时；`description` / `image` / `year` / `aggregateRating` / `duration` / `genre` / `sameAs` 在对应值 >0 或非空时才输出。`datePublished` 由 `shared_at` 归一成 ISO 日期（`2006-01-02`），`shared_at` 为空时整个字段省略。
+
+### `GET /?id=<n>`（门户深链）
+首页 HTML 由服务端渲染，`?id=` 命中已推送记录时，`</head>` 前注入该资源自己的标签，并删除模板里的站点级 `title` / `description` / `og:` / `twitter:`，保证同名标签全局唯一：
+
+```html
+<link rel="canonical" href="https://gy.example.com/?id=42" />
+<title>千与千寻（2001） · 光鸭 GO</title>
+<meta name="description" content="…" />
+<meta property="og:type" content="video.movie" />
+<meta property="og:title" content="千与千寻（2001）" />
+<meta property="og:image" content="https://image.tmdb.org/t/p/w500/xxx.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+<script id="structured-data" data-item-id="42" type="application/ld+json">{ "@type": "Movie", … }</script>
+```
+
+- `id` 缺失、非法或记录未推送时，退回站点级标签，页面仍是可用的列表页。
+- 标签值全部经 `html.EscapeString` 转义，JSON-LD 由 `json.Marshal` 转义尖括号，不引入内联脚本。
+- 门户 URL 与页面状态双向绑定：`?id` 详情、`?q` 关键词、`?media_type`、`?year`、`?sort`（打开详情用 `pushState`，改筛选只 `replaceState`）。前端挂载时按 URL 回填，`data-item-id` 命中当前资源时不再重复请求 `/api/structured-data/:id`。
+- `canonical` 对带 `id` 的请求只保留 `id`，避免 `?id=42&q=x` 这类组合被规范到列表页；`sitemap.xml` 的 `lastmod` 与 `datePublished` 用同一个 `schemaDate`。
 
 ---
 

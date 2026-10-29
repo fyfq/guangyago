@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"errors"
 	"net/http"
 	"strconv"
@@ -82,4 +83,22 @@ func (s *Server) portalStats(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, stats)
+}
+
+// portalLink 返回单条已推送资源，供 /?id=<n> 深链直接打开详情。
+func (s *Server) portalLink(c *gin.Context) {
+	id, ok := parseID(c)
+	if !ok {
+		return
+	}
+	item, err := s.store.GetPublic(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "资源不存在"})
+		return
+	}
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, item)
 }

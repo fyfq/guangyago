@@ -1,12 +1,17 @@
 package api
 
 import (
+	"database/sql"
+	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"html"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,16 +64,9 @@ func (s *Server) sitemapXML(c *gin.Context) {
 	}
 
 	for _, item := range items {
-		loc := fmt.Sprintf("%s/?id=%d", baseURL, item.ID)
-		lastMod := ""
-		if item.SharedAt != "" {
-			if t, err := time.Parse("2006-01-02 15:04:05", item.SharedAt); err == nil {
-				lastMod = t.Format("2006-01-02")
-			}
-		}
 		urls = append(urls, URLItem{
-			Loc:        loc,
-			LastMod:    lastMod,
+			Loc:        fmt.Sprintf("%s/?id=%d", baseURL, item.ID),
+			LastMod:    schemaDate(item.SharedAt),
 			ChangeFreq: "monthly",
 			Priority:   0.8,
 		})
@@ -118,6 +116,10 @@ func (s *Server) itemStructuredData(c *gin.Context) {
 	}
 
 	item, err := s.store.GetPublic(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "资源不存在"})
+		return
+	}
 	if err != nil {
 		serverError(c, err)
 		return
@@ -182,15 +184,125 @@ var googleTokenRe = regexp.MustCompile(`^[A-Za-z0-9_-]{10,120}$`)
 
 // headTags 汇总需要注入首页原始 HTML 的标签。
 // 走原始 HTML 而不是前端脚本，是因为 CSP 禁内联脚本，爬虫也读不到 JS 补挂的标签。
+// ?id=<n> 时输出该资源自己的标题/描述/OG/JSON-LD，否则退回站点级。
 func (s *Server) headTags(c *gin.Context) string {
+	item := s.requestedPublicItem(c)
 	tags := s.googleMetaTag()
 	if canonical := s.canonicalTag(c); canonical != "" {
 		tags += "\n    " + canonical
 	}
-	return tags
+	if item == nil {
+		return tags
+	}
+	return tags + "\n    " + itemHeadTags(item, s.siteName(), s.getBaseURL(c))
+}
+
+// requestedPublicItem 取当前请求 ?id 对应的已推送资源；缺 id、id 非法或资源未收录时返回 nil。
+func (s *Server) requestedPublicItem(c *gin.Context) *model.PublicLink {
+	raw := strings.TrimSpace(c.Query("id"))
+	if raw == "" {
+		return nil
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		return nil
+	}
+	item, err := s.store.GetPublic(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		slog.Warn("读取单条资源失败", "id", raw, "err", err)
+		return nil
+	}
+	return item
+}
+
+// metaSummaryMaxRunes 是注入到描述类标签里的最大字符数，超出部分按省略号截断。
+const metaSummaryMaxRunes = 200
+
+// itemHeadTags 生成单条资源的原始 HTML 标签。
+// 值全部经过 html 转义，JSON-LD 由 json.Marshal 转义尖括号与 &，因此可以安全拼进 head。
+func itemHeadTags(item *model.PublicLink, siteName, baseURL string) string {
+	label := "影视资源"
+	if item.MediaType == model.MediaTV {
+		label = "剧集"
+	} else if item.MediaType == model.MediaMovie {
+		label = "电影"
+	}
+
+	title := strings.TrimSpace(item.Title)
+	if title == "" {
+		title = "未命名资源"
+	}
+	if item.Year > 0 {
+		title = fmt.Sprintf("%s（%d）", title, item.Year)
+	}
+
+	desc := truncateRunes(strings.TrimSpace(item.Overview), metaSummaryMaxRunes)
+	if desc == "" {
+		desc = fmt.Sprintf("%s《%s》的网盘分享链接", label, item.Title)
+	}
+
+	pageURL := fmt.Sprintf("%s/?id=%d", baseURL, item.ID)
+	out := []string{
+		"<title>" + htmlEscape(title+" · "+siteName) + "</title>",
+		`<meta name="description" content="` + htmlEscape(desc) + `" />`,
+		`<meta property="og:type" content="video.movie" />`,
+		`<meta property="og:url" content="` + htmlEscape(pageURL) + `" />`,
+		`<meta property="og:title" content="` + htmlEscape(title) + `" />`,
+		`<meta property="og:description" content="` + htmlEscape(desc) + `" />`,
+		`<meta property="og:site_name" content="` + htmlEscape(siteName) + `" />`,
+		`<meta name="twitter:card" content="summary_large_image" />`,
+		`<meta name="twitter:title" content="` + htmlEscape(title) + `" />`,
+		`<meta name="twitter:description" content="` + htmlEscape(desc) + `" />`,
+	}
+	if item.PosterURL != "" {
+		out = append(out,
+			`<meta property="og:image" content="`+htmlEscape(item.PosterURL)+`" />`,
+			`<meta name="twitter:image" content="`+htmlEscape(item.PosterURL)+`" />`,
+		)
+	}
+	if jsonld, err := json.Marshal(buildMovieSchema(item, baseURL)); err == nil {
+		// id 与前端注入的单条标记一致，data-item-id 让 SPA 认出「这条已经有了」，不必再取一次
+		out = append(out, `<script id="structured-data" data-item-id="`+strconv.FormatInt(item.ID, 10)+`" type="application/ld+json">`+string(jsonld)+`</script>`)
+	} else {
+		slog.Warn("生成结构化数据失败", "id", item.ID, "err", err)
+	}
+	return strings.Join(out, "\n    ")
+}
+
+// schemaDate 把库里的 "2006-01-02 15:04:05" 归一成 ISO 8601 日期；
+// 解析不了就退回一个不带时区的日期串，避免 Search Console 报无效日期。
+func schemaDate(sharedAt string) string {
+	sharedAt = strings.TrimSpace(sharedAt)
+	if sharedAt == "" {
+		return ""
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", sharedAt); err == nil {
+		return t.Format("2006-01-02")
+	}
+	if len(sharedAt) >= 10 {
+		return sharedAt[:10]
+	}
+	return sharedAt
+}
+
+// htmlEscape 转义属性值与标签正文里的引号、尖括号，防止闭合 content=" 或 </title> 注入标签。
+func htmlEscape(v string) string { return html.EscapeString(v) }
+
+// truncateRunes 按字符数截断，避免把多字节中文切成半个字节。
+func truncateRunes(v string, n int) string {
+	r := []rune(v)
+	if len(r) <= n {
+		return v
+	}
+	return string(r[:n]) + "…"
 }
 
 // injectHeadTags 把标签插进 index.html 的 </head> 之前，供 SEO 验证与站点级元信息使用。
+// 标签里带 <title> 说明是单页：先删掉模板里的站点级标题/描述/社交标签，
+// 否则同一页会出现两套 og:title、description，爬虫取哪一套不确定。
 func injectHeadTags(indexHTML, tags string) string {
 	if tags == "" {
 		return indexHTML
@@ -199,8 +311,18 @@ func injectHeadTags(indexHTML, tags string) string {
 	if idx < 0 {
 		return indexHTML
 	}
+	if strings.Contains(tags, "<title>") {
+		if open, lo := strings.Index(indexHTML, "<title>"), strings.Index(indexHTML, "</title>"); open >= 0 && lo > open {
+			indexHTML = indexHTML[:open] + indexHTML[lo+len("</title>"):]
+		}
+		indexHTML = siteMetaRe.ReplaceAllString(indexHTML, "")
+		idx = strings.Index(indexHTML, "</head>")
+	}
 	return indexHTML[:idx] + "    " + tags + "\n  " + indexHTML[idx:]
 }
+
+// siteMetaRe 匹配模板里的站点级 description / og: / twitter: 标签。
+var siteMetaRe = regexp.MustCompile(`[ \t]*<meta\s+(?:property="og:[a-zA-Z_:-]*"|name="twitter:[a-zA-Z_:-]*"|name="description")\s+content="[^"]*"\s*/>\n?`)
 
 // WriteIndex 返回托管的前端首页，并把验证标签注入原始 HTML。
 // 走这里而不是直接透传静态文件，是因为爬虫读不到前端 JS 补挂的 meta 标签。
@@ -226,8 +348,21 @@ func (s *Server) canonicalTag(c *gin.Context) string {
 	}
 	base := s.getBaseURL(c)
 	p := sanitizeCanonicalPath(c.Request.URL.Path)
+	// 带 id 的深链自成一篇，q/sort/page 这类列表参数不应把详情页规范到列表 URL 上
+	if id := onlyCanonicalParam(c.Request.URL.Query(), "id"); id != "" {
+		return `<link rel="canonical" href="` + base + p + "?id=" + id + `" />`
+	}
 	q := sanitizeCanonicalQuery(c.Request.URL.Query())
 	return `<link rel="canonical" href="` + base + p + q + `" />`
+}
+
+// onlyCanonicalParam 取出指定参数的安全值；缺省或非法时返回空串。
+func onlyCanonicalParam(v map[string][]string, key string) string {
+	list := v[key]
+	if len(list) == 0 {
+		return ""
+	}
+	return sanitizeCanonicalValue(list[0])
 }
 
 // sanitizeCanonicalPath 只保留 / 与 URL 安全字符；其余替换掉，防止尖括号或空格破坏属性。
@@ -258,34 +393,34 @@ func sanitizeCanonicalQuery(v map[string][]string) string {
 	if len(v) == 0 {
 		return ""
 	}
-	allowed := map[string]bool{"id": true, "q": true, "page": true, "sort": true}
-	parts := make([]string, 0, len(allowed))
+	parts := make([]string, 0, 4)
 	for _, key := range []string{"id", "q", "page", "sort"} {
-		if !allowed[key] {
-			continue
-		}
 		list := v[key]
-		if len(list) == 0 || list[0] == "" {
+		if len(list) == 0 {
 			continue
 		}
-		safe := make([]rune, 0, len(list[0]))
-		for _, r := range list[0] {
-			switch {
-			case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
-				safe = append(safe, r)
-			case r == '-' || r == '_' || r == '.' || r == '~':
-				safe = append(safe, r)
-			}
+		if safe := sanitizeCanonicalValue(list[0]); safe != "" {
+			parts = append(parts, key+"="+safe)
 		}
-		if len(safe) == 0 {
-			continue
-		}
-		parts = append(parts, key+"="+string(safe))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
 	return "?" + strings.Join(parts, "&")
+}
+
+// sanitizeCanonicalValue 只保留 URL 查询值里的安全字符，防止闭合引号或空格破坏 canonical 属性。
+func sanitizeCanonicalValue(v string) string {
+	safe := make([]rune, 0, len(v))
+	for _, r := range v {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			safe = append(safe, r)
+		case r == '-' || r == '_' || r == '.' || r == '~':
+			safe = append(safe, r)
+		}
+	}
+	return string(safe)
 }
 
 // buildMovieSchema 构建电影/剧集的 Schema.org 结构化数据
@@ -296,13 +431,15 @@ func buildMovieSchema(item *model.PublicLink, baseURL string) map[string]any {
 	}
 
 	data := map[string]any{
-		"@context":      "https://schema.org",
-		"@type":         schemaType,
-		"name":          item.Title,
-		"url":           fmt.Sprintf("%s/?id=%d", baseURL, item.ID),
-		"datePublished": item.SharedAt,
+		"@context": "https://schema.org",
+		"@type":    schemaType,
+		"name":     item.Title,
+		"url":      fmt.Sprintf("%s/?id=%d", baseURL, item.ID),
 	}
 
+	if date := schemaDate(item.SharedAt); date != "" {
+		data["datePublished"] = date
+	}
 	if item.OriginalTitle != "" && item.OriginalTitle != item.Title {
 		data["alternateName"] = item.OriginalTitle
 	}

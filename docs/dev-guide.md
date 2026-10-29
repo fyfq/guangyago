@@ -156,18 +156,21 @@ go build -o guangya-go ./cmd/server   # 必须再编一次，否则前端改动�
 - 日常联调：`cd web && npm run dev`（5173，代理 `/api` 到 127.0.0.1:8090），同时跑着后端二进制即可，不用反复 `make web`。
 - 只有 `make build` 会把产物写成 `bin/guangya`，裸二进制在 `./guangya-go`。
 - 类型检查没有进构建脚本（`npm run build` 不跑 `vue-tsc`），改动 TS 后手动 `cd web && npx vue-tsc --noEmit`。
-- 测试：`go test ./...`，目前仅 `internal/parser` 与 `internal/scraper` 有测试；`internal/api`、`internal/store`、`internal/pipeline` 无测试，改这些地方请用真实的隔离实例验证。
-- 打接口：`curl -c jar -X POST localhost:8090/api/auth/login -d '{"username":"...","password":"..."}'`，后续 `-b jar`。POST 必须同源（Origin/Referer）否则 403。
+- 测试：`go test ./...` 全部离线，不出网。`internal/parser`、`internal/scraper`、`internal/notifier`、`internal/pipeline` 有测试；`internal/api`、`internal/store` 的改动仍要用真实的隔离实例验证。
+- 需要出网的组件靠**根地址注入**做测试接缝：`scraper.NewAtAPIBase(cfg, posterDir, proxy, rate, apiBase)`、`notifier.NewAtServerURL(cfg, proxy, rate, serverURL)`，生产入口 `scraper.New` / `notifier.New` 只是把根地址固定成官方地址的包装；设置页的连通性测试同理走包内的 `testConnectionAt` / `testTelegramAt`。pipeline 的成功路径（`scraped` / `pushed` 两条链路）就是用这两个接缝对着 `httptest` 假服务跑的，见 `internal/pipeline/seam_test.go`。新增接缝时保持 `New*` 与接缝默认值一致，别让玩家和测试走两套逻辑。
+- 冒烟：`make smoke`（`scripts/smoke.sh`）在 `mktemp -d` 里起一个 `127.0.0.1:18099` 的隔离实例，跑「安装 → 登录 → 门户/SEO → 登出」，不碰仓库的 `config.yaml` 和 `data/`，约 1 秒。改 `PORT=` / `BIN=` 用同名环境变量覆盖；CI 里跑之前必须先 `make web`，否则二进制里没有前端首页。
+- 打接口：`curl -c jar -X POST localhost:8090/api/auth/login -d '{"username":"...","password":"..."}'`，后续 `-b jar`。POST 带 Origin/Referer 时才做同源校验（跨站 403），命令行这类没有来源头的客户端直接放行，浏览器里的 CSRF 防线靠它加 `SameSite=Lax` 双层。
 - 端口占用：`lsof -ti:8090 | xargs kill -9`。
 - Telegram Bot 单实例：同一 Token 只能有一个 getUpdates 消费者，本地再起一个实例会看到 `Conflict: terminated by other getUpdates request`。
 - 干净退出才会把 WAL 合并回主库；热拷贝 `guangya.db` 前先停服务，或连 `-wal`/`-shm` 一起拷。
 
 ## 11. 发布与部署
 
-- `Makefile`：`build` / `run` / `import FILE=` / `vet` / `tidy` / `clean` / `web`。
+- `Makefile`：`build` / `run` / `import FILE=` / `vet` / `tidy` / `clean` / `web` / `lint` / `smoke` / `cover` / `tools`。
 - `Dockerfile` 三阶段：`node:22-alpine` 出前端 → `golang:1.26-alpine` 交叉编译（`CGO_ENABLED=0`、`-trimpath -s -w`）→ `alpine:3.22` 运行（`ca-certificates`/`tzdata`、`USER 1000`、`EXPOSE 8090`、配置在 `/app/data/config.yaml`）。构建参数 `BUILD_PROXY`（只认 HTTP 端口）、`NPM_REGISTRY`、`GOPROXY`；首行刻意不写 `# syntax=`，避免 BuildKit 先去 Docker Hub 拉前端镜像。
 - `docker-compose.yml`：单服务 `app`，`pull_policy: always` + `image: ghcr.io/fyfq/guangyago:latest`，`8090:8090`，`./data:/app/data`，`host-gateway` 映射 `host.docker.internal`，`/api/health` 健康检查。
-- `.github/workflows/docker-image.yml`（唯一工作流）：push main / `v*` tag / 手动触发 → QEMU+Buildx 多架构（amd64+arm64）推 GHCR。
+- `.github/workflows/ci.yml`：push main / PR / 手动触发 → `make tools` → `make lint` → `go test ./...` → `make web && make build` → `make smoke`（约 1 秒）；纯文档改动（`**.md`、`docs/**`、`LICENSE`、`.gitignore`）不跑，同分支并发自动取消旧任务。
+- `.github/workflows/docker-image.yml`：push main / `v*` tag / 手动触发 → QEMU+Buildx 多架构（amd64+arm64）推 GHCR。
 - 裸机：交叉编译出的单文件无任何依赖（纯 Go SQLite + 嵌入前端），配 `guangya.service`（`DynamicUser`，状态目录 `/var/lib/guangya/data/`）。
 - 公网部署务必挂 HTTPS 反向代理；`PROXY_ADDR` 指向宿主机代理时写 `host.docker.internal:7890`，写 `127.0.0.1` 指向的是容器自己。
 

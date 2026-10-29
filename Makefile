@@ -1,4 +1,4 @@
-.PHONY: build run import vet tidy clean web lint staticcheck gosec cover web-lint
+.PHONY: build run import vet tidy clean web lint staticcheck gosec cover web-lint smoke
 
 GO ?= go
 BIN_DIR := $(shell $(GO) env GOPATH)/bin
@@ -13,6 +13,10 @@ build:
 
 run: build
 	./bin/guangya -config config.yaml
+
+# 冒烟：临时目录起隔离实例，跑通安装→登录→门户/SEO→后台读取，全程不出网
+smoke: build
+	./scripts/smoke.sh
 
 # 导入光鸭批量分享记录或单条分享文本
 import: build

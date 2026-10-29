@@ -1,0 +1,49 @@
+name: CI
+
+# 代码门禁：静态检查 + 单元测试 + 冒烟。纯文档改动不跑，镜像构建交给 docker-image.yml。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 安装检查工具
+        run: make tools
+
+      - name: 静态检查与前端类型检查
+        run: make lint
+
+      - name: 单元测试（全离线，不出网）
+        run: go test ./...
+
+      - name: 构建前端并编译二进制
+        run: make web && make build
+
+      - name: 冒烟测试
+        run: make smoke

@@ -245,10 +245,17 @@ func securityHeaders() gin.HandlerFunc {
 
 const maxJSONBody = 1 << 20
 
-// limitBody 给普通接口设请求体上限；导入接口在 handler 里另有 32MB 限制。
+// bodyFreePaths 由 handler 自己按素材类型限流，套 1MB 通用上限会把「图片过大」
+// 变成读不出来的传输错误。
+var bodyFreePaths = map[string]bool{
+	"/api/links/import": true,
+	"/api/branding":     true,
+}
+
+// limitBody 给普通接口设请求体上限；导入与站点素材接口在 handler 里各自限流。
 func limitBody() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if c.Request.Body != nil && c.Request.URL.Path != "/api/links/import" {
+		if c.Request.Body != nil && !bodyFreePaths[c.Request.URL.Path] {
 			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxJSONBody)
 		}
 		c.Next()

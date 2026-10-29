@@ -223,14 +223,20 @@ var googleTokenRe = regexp.MustCompile(`^[A-Za-z0-9_-]{10,120}$`)
 // ?id=<n> 时输出该资源自己的标题/描述/OG/JSON-LD，否则退回站点级。
 func (s *Server) headTags(c *gin.Context) string {
 	item := s.requestedPublicItem(c)
-	tags := s.googleMetaTag()
+	parts := make([]string, 0, 4)
+	if tag := s.googleMetaTag(); tag != "" {
+		parts = append(parts, tag)
+	}
+	if tag := s.brandingHeadTags(); tag != "" {
+		parts = append(parts, tag)
+	}
 	if canonical := s.canonicalTag(c); canonical != "" {
-		tags += "\n    " + canonical
+		parts = append(parts, canonical)
 	}
-	if item == nil {
-		return tags
+	if item != nil {
+		parts = append(parts, itemHeadTags(item, s.siteName(), s.getBaseURL(c)))
 	}
-	return tags + "\n    " + itemHeadTags(item, s.siteName(), s.getBaseURL(c))
+	return strings.Join(parts, "\n    ")
 }
 
 // requestedPublicItem 取当前请求 ?id 对应的已推送资源；缺 id、id 非法或资源未收录时返回 nil。
@@ -427,16 +433,17 @@ func injectHeadTags(indexHTML, tags string) string {
 var siteMetaRe = regexp.MustCompile(`[ \t]*<meta\s+(?:property="og:[a-zA-Z_:-]*"|name="twitter:[a-zA-Z_:-]*"|name="description")\s+content="[^"]*"\s*/>\n?`)
 
 // WriteIndex 返回托管的前端首页，并把验证标签注入原始 HTML。
-// 走这里而不是直接透传静态文件，是因为爬虫读不到前端 JS 补挂的 meta 标签。
+// 走这里而不是直接透传静态文件，是因为爬虫读不到前端 JS 补挂的 meta 标签，
+// 站点名也要在服务端把模板占位符换成配置值。
 func (s *Server) WriteIndex(c *gin.Context, fsys fs.FS) {
 	body, err := fs.ReadFile(fsys, "index.html")
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "首页不可用"})
 		return
 	}
-	tags := s.headTags(c)
+	doc := injectHeadTags(string(body), s.headTags(c))
 	c.Header("Cache-Control", "no-cache")
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(injectHeadTags(string(body), tags)))
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(s.applySiteName(doc)))
 }
 
 // canonicalTag 按当前请求的完整 URL 生成 <link rel="canonical">，

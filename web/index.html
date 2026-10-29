@@ -3,20 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>光鸭 GO - 网盘资源分享平台</title>
-    <meta name="description" content="光鸭 GO 资源库，分享优质网盘资源，涵盖电影、剧集等影视内容。" />
+    <!-- 大括号包裹的站点名占位符由服务端 WriteIndex 替换成配置里的站点名；开发服务器上取不到时靠前端兜底 -->
+    <title>{{SITE_NAME}} - 网盘资源分享平台</title>
+    <meta name="description" content="{{SITE_NAME}} 资源库，分享优质网盘资源，涵盖电影、剧集等影视内容。" />
     <meta name="keywords" content="光鸭,网盘资源,电影,剧集,影视,分享" />
     <meta name="robots" content="index, follow" />
-    <!-- canonical 由服务端 WriteIndex 注入，避免 CSP script-src 'self' 拦截内联脚本 -->
+    <!-- canonical 与站点图标（rel=icon）由服务端 WriteIndex 注入，避免 CSP script-src 'self' 拦截内联脚本 -->
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="光鸭 GO - 网盘资源分享平台" />
-    <meta property="og:description" content="光鸭 GO 资源库，分享优质网盘资源，涵盖电影、剧集等影视内容。" />
-    <meta property="og:site_name" content="光鸭 GO" />
+    <meta property="og:title" content="{{SITE_NAME}} - 网盘资源分享平台" />
+    <meta property="og:description" content="{{SITE_NAME}} 资源库，分享优质网盘资源，涵盖电影、剧集等影视内容。" />
+    <meta property="og:site_name" content="{{SITE_NAME}}" />
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="光鸭 GO - 网盘资源分享平台" />
-    <meta name="twitter:description" content="光鸭 GO 资源库，分享优质网盘资源，涵盖电影、剧集等影视内容。" />
+    <meta name="twitter:title" content="{{SITE_NAME}} - 网盘资源分享平台" />
+    <meta name="twitter:description" content="{{SITE_NAME}} 资源库，分享优质网盘资源，涵盖电影、剧集等影视内容。" />
   </head>
   <body>
     <div id="app"></div>

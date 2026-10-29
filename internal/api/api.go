@@ -70,6 +70,11 @@ func (s *Server) Register(r *gin.Engine) {
 	r.GET("/api/structured-data", s.structuredData)
 	r.GET("/api/structured-data/:id", s.itemStructuredData)
 
+	// 品牌信息（站点标题 / logo / 图标）会出现在公开页面的 HTML 里，读取无需鉴权；
+	// 素材文件只按配置里记录的文件名回源。
+	r.GET("/api/branding", s.brandingState)
+	r.GET("/branding/:name", s.brandingFile)
+
 	// 公开接口：健康检查、登录、资源门户、安装向导
 	r.POST("/api/auth/login", s.login)
 	r.GET("/api/setup/status", s.setupStatus)
@@ -113,6 +118,9 @@ func (s *Server) Register(r *gin.Engine) {
 			admin.GET("/settings", s.settings)
 			admin.POST("/settings", s.updateSettings)
 			admin.POST("/settings/test", s.testConfig)
+
+			admin.POST("/branding", s.brandingUpload)
+			admin.DELETE("/branding", s.brandingClear)
 
 			users := admin.Group("/users")
 			users.GET("", s.listUsers)

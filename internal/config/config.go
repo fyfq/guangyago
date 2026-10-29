@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +39,20 @@ type SEOConfig struct {
 	BaseURL string `yaml:"base_url"`
 	// SiteName 出现在结构化数据与站点地图说明中。
 	SiteName string `yaml:"site_name"`
+	// LogoFile / IconFile 是后台上传的自定义 logo、站点图标在 branding 目录下的文件名
+	//（如 logo.png）。只存文件名：静态路由按白名单精确匹配后回源，避免拼接任意路径。
+	// 留空表示用前端内置的默认标识。
+	LogoFile string `yaml:"logo_file"`
+	IconFile string `yaml:"icon_file"`
+}
+
+// BrandingDir 返回自定义品牌素材（logo、站点图标）的落盘目录。
+func (c *Config) BrandingDir() string {
+	dir := "data"
+	if c != nil && strings.TrimSpace(c.Storage.DataDir) != "" {
+		dir = c.Storage.DataDir
+	}
+	return filepath.Join(dir, "branding")
 }
 
 // RateConfig 汇总各三方服务的限流参数。

@@ -114,7 +114,7 @@
 | `netdisk` | `guangya_hosts`、`user_agent`、`cookie`、`timeout` |
 | `pipeline` | `workers`、`auto_push`、（`max_retry`/`retry_delay` 目前是死配置） |
 | `proxy` | `enable`、`addr`（裸 `host:port` 按 socks5 处理）、`username`、`password` |
-| `seo` | `google_verification`、`base_url`、`site_name` |
+| `seo` | `google_verification`、`base_url`、`site_name`、`logo_file`/`icon_file`（后台上传素材的文件名，由接口写入，图片落在 `<data_dir>/branding/`） |
 | `rate_limit` | `tmdb.per_second/burst/shared_credentials`、`telegram.interval_ms/channel_only/shared_credentials/paid_broadcast`、`guangya.concurrency`；`Effective*` 会夹到官方下限（群组 3000ms、会话 1000ms、TMDB ≤40/s） |
 
 环境变量：`TMDB_API_KEY`、`TG_BOT_TOKEN`、`TG_CHAT_ID`、`GUANGYA_COOKIE`、`PROXY_ADDR`、`PROXY_USERNAME`、`PROXY_PASSWORD`、`SEO_BASE_URL`；`ADMIN_USERNAME`/`ADMIN_PASSWORD` 只在用户表为空时被 `ensureAdmin` 使用。
@@ -129,7 +129,7 @@
 - sitemap 数据来自 `store.Sitemap(offset, limit)`（只取 `id` + `updated_at`，比 `ListPublic` 轻）。单文件上限 `maxSitemapURLs = 5000`：超出后 `/sitemap.xml` 返回 `sitemapindex`，分片回到同一 handler 的 `?part=<n>`，**不会再静默丢掉最老的记录**。`lastmod` 用 `updated_at`（重刮/改状态都会刷新），首页条目的 `lastmod` 用全站 `MAX(updated_at)`。`robots.txt` 与 `sitemap.xml` 都带 `Cache-Control: public, max-age=3600`。
 - `updated_at` 是 DATETIME 列，SQL 里一律 `CAST(... AS TEXT)` 再扫进 `string`，避免驱动按时间类型解析时踩格式差异。
 - 域名解析顺序：`seo.base_url` 优先，否则按请求 TLS 与 `Host` 推断。**放在反向代理或多域名环境里必须固定 `base_url`**，否则 sitemap 会写成内网地址。
-- `WriteIndex` 在返回首页 HTML 时把 `<meta name="google-site-verification">` 和 `<link rel="canonical">` 注入 `<head>`；请求带 `?id=<n>` 且记录已收录（刮削成功）时，再注入该资源自己的 `title` / `description` / `og:` / `twitter:` / JSON-LD，并删掉模板里的站点级同类标签，避免同名标签重复。必须走服务端注入：CSP 拦内联脚本，爬虫也读不到前端 JS 补的标签。`/admin*`、`/login`、`/setup` 不生成 canonical。
+- `WriteIndex` 在返回首页 HTML 时把 `<meta name="google-site-verification">`、`<link rel="canonical">` 和站点图标 `<link rel="icon">` 注入 `<head>`，并把模板里的 `{{SITE_NAME}}` 换成 `seo.site_name`（先 `html.EscapeString`，否则后台填一个 `"><script>` 就能闭合 `<title>` 往 head 里塞标签）；请求带 `?id=<n>` 且记录已收录（刮削成功）时，再注入该资源自己的 `title` / `description` / `og:` / `twitter:` / JSON-LD，并删掉模板里的站点级同类标签，避免同名标签重复。必须走服务端注入：CSP 拦内联脚本，爬虫也读不到前端 JS 补的标签。`/admin*`、`/login`、`/setup` 不生成 canonical。
 - 门户把页面状态绑到查询串（`?id`/`?q`/`?media_type`/`?year`/`?sort`），`PortalView` 挂载时 `applyURL()` 回填、`popstate` 时重新回填：打开详情用 `pushState`（返回键先关详情），改筛选只 `replaceState`（不塞历史）。所以 sitemap 里的 `/?id=<n>` 是能被爬虫打开的真实页面，而不是一串回落到空壳首页的 URL。
 - 验证码只允许 `^[A-Za-z0-9_-]{10,120}$`，不合法直接 400——这是防 HTML 注入的硬约束，放宽前想清楚。
 - 后台 SEO 页（`web/src/views/SEOView.vue`）：填验证码、复制 meta 标签、拉一次首页原始 HTML 自检标签是否生效、给出 Search Console 深链与提交步骤。
@@ -144,6 +144,7 @@
 - `web/src/lib/api.ts` 是唯一的取数入口，接口类型与后端 JSON tag 一一对应；改后端字段记得同步。
 - 样式约定：只在 `style.css` 的 `@theme` 定义一次 token，组件里用 `text-[var(--color-*)]` 引用，不写裸色值；字体统一系统默认（`-apple-system / PingFang SC`）。
 - `web/src/lib/utils.ts` 的 `safeExternalUrl` 是所有外链/头像 URL 的协议白名单，别绕过它。
+- 站点品牌集中在 `web/src/lib/branding.ts`：一个 `reactive` 单例 + `loadBranding()`（`App.vue` 挂载时取一次，失败就用内置默认值，不拖垮页面）。素材地址只放行 `/branding/` 开头的同源路径，所以绑到 `:src` 前不必再过协议白名单。页面标题靠各视图自己的 `syncTitle()` + `watch(() => branding.site_name, …)` 跟随——品牌信息是异步到的，只在 `onMounted` 设一次会停在默认名。
 
 ## 10. 构建、调试、测试
 
@@ -168,7 +169,7 @@ go build -o guangya-go ./cmd/server   # 必须再编一次，否则前端改动�
 
 - `Makefile`：`build` / `run` / `import FILE=` / `vet` / `tidy` / `clean` / `web` / `lint` / `smoke` / `cover` / `tools`。
 - `Dockerfile` 三阶段：`node:22-alpine` 出前端 → `golang:1.26-alpine` 交叉编译（`CGO_ENABLED=0`、`-trimpath -s -w`）→ `alpine:3.22` 运行（`ca-certificates`/`tzdata`、`USER 1000`、`EXPOSE 8090`、配置在 `/app/data/config.yaml`）。构建参数 `BUILD_PROXY`（只认 HTTP 端口）、`NPM_REGISTRY`、`GOPROXY`；首行刻意不写 `# syntax=`，避免 BuildKit 先去 Docker Hub 拉前端镜像。
-- `docker-compose.yml`：单服务 `app`，`pull_policy: always` + `image: ghcr.io/fyfq/guangyago:latest`，`8090:8090`，`./data:/app/data`，`host-gateway` 映射 `host.docker.internal`，`/api/health` 健康检查。
+- `docker-compose.yml`：单服务 `app`，`pull_policy: always` + `image: ghcr.io/fyfq/guangyago:latest`，`8090:8090`，`./data:/app/data`，`host-gateway` 映射 `host.docker.internal`，`/api/health` 健康检查。站点素材写在 `<data_dir>/branding/`（进程属主可写，0750 目录 / 0600 文件），跟着 `./data` 卷一起备份，无需额外挂载。
 - `.github/workflows/ci.yml`：push main / PR / 手动触发 → `make tools` → `make lint` → `go test ./...` → `make web && make build` → `make smoke`（约 1 秒）；纯文档改动（`**.md`、`docs/**`、`LICENSE`、`.gitignore`）不跑，同分支并发自动取消旧任务。
 - `.github/workflows/docker-image.yml`：push main / `v*` tag / 手动触发 → QEMU+Buildx 多架构（amd64+arm64）推 GHCR。
 - 裸机：交叉编译出的单文件无任何依赖（纯 Go SQLite + 嵌入前端），配 `guangya.service`（`DynamicUser`，状态目录 `/var/lib/guangya/data/`）。
@@ -187,6 +188,8 @@ go build -o guangya-go ./cmd/server   # 必须再编一次，否则前端改动�
 | 改 schema | `store.migrateSQL` 幂等（`IF NOT EXISTS`）、`schemaVersion` 自增、存量库需数据迁移时要写显式迁移而不是只改建表串 |
 | 改推送文案 | `notifier.Caption` 与 `GET /api/links/:id/caption` 同源，界面预览不用改 |
 | 改 SEO 注入 | `seo.go` 的 `headTags`/`WriteIndex`，注意 CSP 与 `base_url` |
+| 改站点品牌（标题/Logo/图标） | `branding.go` 的 `brandingSnapshot`/`headTags` 注入、`web/index.html` 的 `{{SITE_NAME}}` 占位符（注释里别写这个串，会一起被替换）、`web/src/lib/branding.ts`、门户/后台/登录三处头部、`scripts/smoke.sh` 的「站点品牌」段 |
+| 加同源静态文件路由 | 名称必须与配置里记录的值精确相等才回源（参考 `brandingFile`），别用 `http.ServeFile` 直接把目录挂出去；同时确认 `cmd/server/main.go` 的通用请求体上限是否要放行（`bodyFreePaths`） |
 
 已知的历史坑（别重复踩）：
 

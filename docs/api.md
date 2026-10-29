@@ -1,6 +1,6 @@
 # 光鸭 GO 接口文档
 
-覆盖 `internal/api` 当前注册的全部路由。最后核对 2026-10-29，对应提交 `81655f8`。改接口请同步更新本文（维护清单见 [docs/dev-guide.md](dev-guide.md#12-维护清单)）。
+覆盖 `internal/api` 当前注册的全部路由。最后核对 2026-10-30（新增站点品牌接口）。改接口请同步更新本文（维护清单见 [docs/dev-guide.md](dev-guide.md#12-维护清单)）。
 
 ## 约定
 
@@ -9,7 +9,7 @@
   - `server.secure_cookie` 省略时按当次请求是否 TLS 自动判定；反代在边缘终止 TLS 时请显式设为 `true`，纯本地 http 调试可设 `false`。
   - 未登录 → `401 {"error":"未登录"}`；Cookie 有效但会话过期/被撤销 → `401 {"error":"登录已失效"}`；角色不足 → `403 {"error":"需要管理员权限"}`。
 - **CSRF**：所有 `POST/PUT/PATCH/DELETE` 都做了同源校验。浏览器跨源 XHR 会带 `Origin`，不同源直接 `403 {"error":"跨站请求已被拒绝"}`；`curl` 不带 Origin/Referer 时放行。
-- **请求体**：普通接口上限 1MB，`/api/links/import` 32MB。JSON 接口 `Content-Type: application/json`。
+- **请求体**：普通接口上限 1MB，`/api/links/import` 32MB。`/api/branding` 不设通用上限，由 handler 按素材类型各自限流（Logo 512KB / 站点图标 256KB），否则「图片过大」会以传输错误呈现。JSON 接口 `Content-Type: application/json`。
 - **响应**：一律 `Cache-Control: no-store`。错误统一 `{"error": "中文提示"}`，HTTP 状态码见各接口。服务端内部错误只回 `500 {"error":"服务器内部错误"}`，细节进日志。
 - **状态码**：`400` 参数/校验不合法 · `401` 未登录 · `403` 权限或 CSRF · `404` 记录不存在（或 `NoRoute` 下的 `/api/*`）· `409` 用户名冲突 · `429` 登录锁定 · `503` 依赖组件未就绪（管道/TMDB Key/配置未加载）。
 
@@ -40,6 +40,8 @@
 `PublicLink`（门户最小字段集）：`id, title, original_title, year, media_type, tmdb_id, overview, genres, vote_average, runtime, poster_url, url, code, shared_at`。
 
 `User`：`id, username, display_name, role(admin|operator), enabled, last_login_at, created_at`（不含密码字段）。
+
+`Branding`：`site_name, logo_url, icon_url`。两个素材地址是同源相对路径（`/branding/logo.png?v=1730246400`），未配置时为空串；`?v=` 取文件修改时间，换图后自动换址绕过浏览器缓存。
 
 `TaskProgress`：`running, kind(scrape|push), total, done, failed, current, error`。
 
@@ -199,6 +201,19 @@ XML（`Content-Type: application/xml`，`Cache-Control: public, max-age=3600`）
 - 标签值全部经 `html.EscapeString` 转义，JSON-LD 由 `json.Marshal` 转义尖括号，不引入内联脚本。
 - 门户 URL 与页面状态双向绑定：`?id` 详情、`?q` 关键词、`?media_type`、`?year`、`?sort`（打开详情用 `pushState`，改筛选只 `replaceState`）。前端挂载时按 URL 回填，`data-item-id` 命中当前资源时不再重复请求 `/api/structured-data/:id`。
 - `canonical` 对带 `id` 的请求只保留 `id`，避免 `?id=42&q=x` 这类组合被规范到列表页；`sitemap.xml` 的 `lastmod` 与 `datePublished` 用同一个 `schemaDate`。
+
+---
+
+### `GET /api/branding`
+站点品牌信息，**公开**（门户/后台/登录页的头部与浏览器标签都要用）。
+
+```json
+{ "site_name": "光鸭影视库", "logo_url": "/branding/logo.png?v=1730246400", "icon_url": "" }
+```
+
+- `site_name` 来自 `seo.site_name`，留空回落到默认值 `光鸭 GO`。
+- 首页原始 HTML 的 `title` / `description` / `og:` / `twitter:` 由服务端把模板里的 `{{SITE_NAME}}` 占位符替换成站点名（先 HTML 转义再拼，防止闭合 `<title>` 往 head 里塞标签）。
+- 配了站点图标时额外注入 `<link rel="icon" href="/branding/icon.png?v=…" />`；没配就不注入，交给浏览器默认。
 
 ---
 
@@ -375,6 +390,22 @@ TMDB 预览，**只读不写库**，用于补 ID 时先核对。参数可放 JSO
 - `telegram`：`getMe` → `getChat` → 校验 Bot 是否为频道管理员。
 - `proxy`：经代理访问 Telegram，附带出口 IP（拿不到 IP 不影响结论）。
 
+### `POST /api/branding`
+`multipart/form-data` 上传站点素材：字段 `logo` / `icon` 至少带一个，`save_to_file=true` 时把文件名写回 `config.yaml`（省略则只活到本次进程）。
+
+→ `Branding`（回包就是最新状态，前端直接覆盖全站品牌信息，不必再拉一次）
+
+- 类型按**文件头嗅探**判定，只认 PNG / JPEG / GIF / WebP；不看客户端的 `filename` 与 `Content-Type`，**SVG 一律拒绝**（同源 SVG 可内嵌脚本）。
+- 大小上限：Logo 512KB、站点图标 256KB。
+- 落盘文件名固定为 `<kind><嗅探扩展名>`（`logo.png`、`icon.jpg`…），换格式时删掉旧文件；目录 `<storage.data_dir>/branding`（0750），文件 0600。先写 `.tmp` 再改名，避免留下半张图。
+- `400`：`缺少 logo 或 icon 文件` / `只支持 PNG / JPEG / GIF / WebP 图片` / `图片超过 512 KB，请压缩后再上传` / `图片内容为空` / `读取上传文件失败`。
+- `503 配置未加载`；未配置 `storage.data_dir` 或写盘失败 → `500`。
+- 站点标题不在这里改，走 `POST /api/settings` 的 `seo.site_name`（留空即回到默认「光鸭 GO」）。
+
+### `DELETE /api/branding?kind=logo|icon&save_to_file=true`
+删除一类素材文件并清空配置里的引用。→ `Branding`
+`kind` 缺失或不是 `logo` / `icon` → `400 {"error":"kind 只支持 logo / icon"}`。
+
 ### `GET /api/users`
 → `{"total":N,"items":[User...]}`
 
@@ -405,10 +436,11 @@ TMDB 预览，**只读不写库**，用于补 ID 时先核对。参数可放 JSO
 
 | 路径 | 说明 |
 | --- | --- |
-| `/` | 公开门户（SPA）。响应由服务端注入 `<link rel="canonical">` 与 `<meta name="google-site-verification">` |
+| `/` | 公开门户（SPA）。服务端注入 `<link rel="canonical">`、`<meta name="google-site-verification">`、站点图标 `<link rel="icon">`，并把模板里的 `{{SITE_NAME}}` 换成配置里的站点名 |
 | `/?id=<n>` | 门户详情，canonical 会带上 `?id=` |
 | `/setup` | 安装向导，`installed=true` 时自动离开 |
 | `/login` | 登录页，未安装时自动跳 `/setup`；`?next=` 只接受 `/admin*` |
 | `/admin` | 后台（`/admin/<任意后缀>` 都回落到同一个 SPA） |
+| `/branding/:name` | 站点素材原图（PNG / JPEG / GIF / WebP）。**只有与配置里 `seo.logo_file` / `seo.icon_file` 精确相等的名字才回源**，其余一律 `404`，既不会路径穿越也暴露不出 `data` 目录里的其它文件；响应带 `Cache-Control: public, max-age=86400` |
 
 后台页签（资源库 / 录入 / 刮削 / 推送 / 设置 / 用户管理 / SEO）不是真实 URL，切换靠前端状态，不产生路由记录。

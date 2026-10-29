@@ -66,5 +66,10 @@ seo:
     google_verification: ""
     # 站点根地址（不含末尾斜杠）。反代后强烈建议固定，否则 sitemap/canonical 域名跟着 Host 走
     base_url: "https://gy.example.com"
-    # 出现在结构化数据与站点地图说明里；留空回落到「光鸭 GO」
+    # 出现在页面标题、结构化数据与站点地图说明里；留空回落到「光鸭 GO」
     site_name: "光鸭 GO"
+    # 下面两项由「后台 → SEO → 站点标识」上传素材时写入，不用手工填。
+    # 图片落在 <data_dir>/branding/ 下，文件名按真实格式固定为 logo.png / icon.jpg 等；
+    # 手工改这两行不会让服务读到别的文件——只有配置里记录的文件名才会回源。
+    logo_file: ""
+    icon_file: ""

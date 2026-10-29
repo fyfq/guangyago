@@ -203,7 +203,7 @@ TMDB: https://www.themoviedb.org/tv/20851
 
 ### 收录与 SEO
 
-`/robots.txt`、`/sitemap.xml`、Schema.org 结构化数据都由服务端动态生成。要进 Google：后台「SEO」页填 Search Console「HTML 标签」给出的验证码，服务端会把它注入首页原始 HTML（爬虫读不到前端脚本补的标签），验证通过后在 Console 里提交 `https://<你的域名>/sitemap.xml`。详细步骤与配置项见 [docs/dev-guide.md](docs/dev-guide.md#8-seo-与-google-录入)。
+`/robots.txt`、`/sitemap.xml`、Schema.org 结构化数据都由服务端动态生成。要进 Google：后台「SEO」页填 Search Console「HTML 标签」给出的验证码，服务端会把它注入首页原始 HTML（爬虫读不到前端脚本补的标签），验证通过后在 Console 里提交 `https://<你的域名>/sitemap.xml`。同一页的「站点标识」可以改站点标题、上传 Logo 与浏览器图标：标题由服务端替换进首页原始 HTML 的 `title`/`og:`/`twitter:`，图片落在 `<data_dir>/branding/`，只接受 PNG / JPEG / GIF / WebP（SVG 可内嵌脚本，不收录）。详细步骤与配置项见 [docs/dev-guide.md](docs/dev-guide.md#8-seo-与-google-录入)。
 
 ### 代理
 

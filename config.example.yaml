@@ -1,6 +1,9 @@
 server:
     addr: :8090
     base_path: ""
+    # 会话 Cookie 是否加 Secure 标记。省略此键时按请求 TLS 自动判断；
+    # 反代在边缘终止 TLS 时（本机 http://），需要显式 true；纯本地 http 调试设为 false。
+    # secure_cookie: true
 storage:
     dsn: data/guangya.db
     data_dir: data
@@ -56,3 +59,12 @@ rate_limit:
         enable: true
         # 光鸭暂无官方配额，分享检测并发保守取 2
         concurrency: 2
+# 搜索引擎收录与站点验证：三项都可留空，也可从「后台 → SEO」页保存
+seo:
+    # Google Search Console「HTML 标签」方式给出的 token，
+    # 会被服务端注入到 index.html 的 <meta name="google-site-verification">
+    google_verification: ""
+    # 站点根地址（不含末尾斜杠）。反代后强烈建议固定，否则 sitemap/canonical 域名跟着 Host 走
+    base_url: "https://gy.example.com"
+    # 出现在结构化数据与站点地图说明里；留空回落到「光鸭 GO」
+    site_name: "光鸭 GO"

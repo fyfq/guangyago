@@ -594,6 +594,7 @@ onUnmounted(() => {
                     <a
                       :href="c.site_url"
                       target="_blank"
+                      rel="noopener noreferrer"
                       class="mt-1 inline-flex items-center gap-1 text-xs text-[var(--color-brand)] hover:underline"
                     >
                       TMDB {{ c.tmdb_id }}

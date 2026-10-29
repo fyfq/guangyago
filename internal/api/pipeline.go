@@ -98,7 +98,7 @@ func (s *Server) tmdbLookup(c *gin.Context) {
 	if req.TMDBID > 0 {
 		one, err := client.LookupByID(ctx, req.TMDBID, req.MediaType)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			serverError(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"mode": "id", "item": one, "items": []*scraper.Candidate{one}})
@@ -112,7 +112,7 @@ func (s *Server) tmdbLookup(c *gin.Context) {
 	}
 	items, err := client.LookupByTitle(ctx, strings.TrimSpace(req.Query), req.Year, 8)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		serverError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"mode": "search", "items": items})

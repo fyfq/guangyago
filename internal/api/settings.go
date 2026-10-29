@@ -15,44 +15,80 @@ import (
 
 // settings 返回当前关键配置是否已就绪（不返回密钥明文）。
 func (s *Server) settings(c *gin.Context) {
+	s.configMu.RLock()
 	cfg := s.cfg
+	s.configMu.RUnlock()
 	if cfg == nil {
 		c.JSON(http.StatusOK, gin.H{})
 		return
 	}
+	s.configMu.RLock()
+	tmdbConfigured := cfg.TMDB.APIKey != ""
+	tgConfigured := cfg.Telegram.Token != ""
+	chatID := string(cfg.Telegram.ChatID)
+	autoPush := cfg.Pipeline.AutoPush
+	workers := cfg.Pipeline.Workers
+	proxyEnable := cfg.Proxy.Enable
+	proxyAddr := maskString(cfg.Proxy.Addr)
+	proxyUser := maskString(cfg.Proxy.Username)
+	hasProxyPass := cfg.Proxy.Password != ""
+	rateTMDBEnable := cfg.Rate.TMDB.Enable
+	rateTMDBPerSec := cfg.Rate.TMDB.PerSecond
+	rateTMDBBurst := cfg.Rate.TMDB.Burst
+	rateTMDBShared := cfg.Rate.TMDB.SharedCredentials
+	rateTGEnable := cfg.Rate.Telegram.Enable
+	rateTGInterval := cfg.Rate.Telegram.IntervalMS
+	rateTGChannel := cfg.Rate.Telegram.ChannelOnly
+	rateTGShared := cfg.Rate.Telegram.SharedCredentials
+	rateTGPaid := cfg.Rate.Telegram.PaidBroadcast
+	rateGYEnable := cfg.Rate.Guangya.Enable
+	rateGYConc := cfg.Rate.Guangya.Concurrency
+	s.configMu.RUnlock()
+
 	c.JSON(http.StatusOK, gin.H{
-		"tmdb_configured":     cfg.TMDB.APIKey != "",
-		"telegram_configured": cfg.Telegram.Token != "",
-		"chat_id":             string(cfg.Telegram.ChatID),
-		"auto_push":           cfg.Pipeline.AutoPush,
-		"workers":             cfg.Pipeline.Workers,
+		"tmdb_configured":     tmdbConfigured,
+		"telegram_configured": tgConfigured,
+		"chat_id":             chatID,
+		"auto_push":           autoPush,
+		"workers":             workers,
 		"proxy": gin.H{
-			"enable":       cfg.Proxy.Enable,
-			"addr":         cfg.Proxy.Addr,
-			"username":     cfg.Proxy.Username,
-			"has_password": cfg.Proxy.Password != "",
+			"enable":       proxyEnable,
+			"addr":         proxyAddr,
+			"username":     proxyUser,
+			"has_password": hasProxyPass,
 		},
-		// 限流参数：默认值即官方建议值，界面据此回显
 		"rate_limit": gin.H{
 			"tmdb": gin.H{
-				"enable":             cfg.Rate.TMDB.Enable,
-				"per_second":         cfg.Rate.TMDB.PerSecond,
-				"burst":              cfg.Rate.TMDB.Burst,
-				"shared_credentials": cfg.Rate.TMDB.SharedCredentials,
+				"enable":             rateTMDBEnable,
+				"per_second":         rateTMDBPerSec,
+				"burst":              rateTMDBBurst,
+				"shared_credentials": rateTMDBShared,
 			},
 			"telegram": gin.H{
-				"enable":             cfg.Rate.Telegram.Enable,
-				"interval_ms":        cfg.Rate.Telegram.IntervalMS,
-				"channel_only":       cfg.Rate.Telegram.ChannelOnly,
-				"shared_credentials": cfg.Rate.Telegram.SharedCredentials,
-				"paid_broadcast":     cfg.Rate.Telegram.PaidBroadcast,
+				"enable":             rateTGEnable,
+				"interval_ms":        rateTGInterval,
+				"channel_only":       rateTGChannel,
+				"shared_credentials": rateTGShared,
+				"paid_broadcast":     rateTGPaid,
 			},
 			"guangya": gin.H{
-				"enable":      cfg.Rate.Guangya.Enable,
-				"concurrency": cfg.Rate.Guangya.Concurrency,
+				"enable":      rateGYEnable,
+				"concurrency": rateGYConc,
 			},
 		},
 	})
+}
+
+// maskString 把字符串中间部分替换为 *，只保留首尾各一个字符；过短则全部遮盖。
+func maskString(s string) string {
+	if s == "" {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= 3 {
+		return strings.Repeat("*", len(runes))
+	}
+	return string(runes[0]) + strings.Repeat("*", len(runes)-2) + string(runes[len(runes)-1])
 }
 
 type settingsRequest struct {
@@ -95,8 +131,10 @@ func (s *Server) updateSettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求体解析失败"})
 		return
 	}
+	s.configMu.Lock()
 	cfg := s.cfg
 	if cfg == nil {
+		s.configMu.Unlock()
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "配置未加载"})
 		return
 	}
@@ -135,7 +173,14 @@ func (s *Server) updateSettings(c *gin.Context) {
 				cfg.Rate.TMDB.PerSecond = *t.PerSecond
 			}
 			if t.Burst != nil {
-				cfg.Rate.TMDB.Burst = *t.Burst
+				burst := *t.Burst
+				if burst < 1 {
+					burst = 1
+				}
+				if burst > 100 {
+					burst = 100
+				}
+				cfg.Rate.TMDB.Burst = burst
 			}
 			if t.SharedCredentials != nil {
 				cfg.Rate.TMDB.SharedCredentials = *t.SharedCredentials
@@ -167,11 +212,15 @@ func (s *Server) updateSettings(c *gin.Context) {
 			}
 		}
 	}
+	var saveErr error
 	if req.SaveToFile && s.configPath != "" {
-		if err := config.Save(s.configPath, cfg); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入配置文件失败: " + err.Error()})
-			return
-		}
+		saveErr = config.Save(s.configPath, cfg)
+	}
+	s.configMu.Unlock()
+
+	if saveErr != nil {
+		serverError(c, saveErr)
+		return
 	}
 	if s.reload != nil {
 		s.reload(cfg)
@@ -194,7 +243,9 @@ type testRequest struct {
 func (s *Server) testConfig(c *gin.Context) {
 	var req testRequest
 	_ = c.ShouldBindJSON(&req)
+	s.configMu.RLock()
 	cfg := s.cfg
+	s.configMu.RUnlock()
 	if cfg == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "配置未加载"})
 		return
@@ -221,7 +272,9 @@ func (s *Server) testConfig(c *gin.Context) {
 	case "tmdb":
 		key := req.TMDBKey
 		if key == "" {
+			s.configMu.RLock()
 			key = cfg.TMDB.APIKey
+			s.configMu.RUnlock()
 		}
 		c.JSON(http.StatusOK, scraper.TestConnection(ctx, key, &proxy))
 	case "telegram":
@@ -236,6 +289,6 @@ func (s *Server) testConfig(c *gin.Context) {
 	case "proxy":
 		c.JSON(http.StatusOK, netutil.TestProxy(ctx, proxy.Addr, proxy.Username, proxy.Password, proxy.Enable))
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "未知测试目标: " + req.Target})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "未知测试目标"})
 	}
 }

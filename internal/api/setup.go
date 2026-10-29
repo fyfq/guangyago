@@ -87,9 +87,12 @@ func (s *Server) setup(c *gin.Context) {
 
 	// 如果提供了 TMDB API Key，保存到配置
 	if strings.TrimSpace(req.TMDBAPIKey) != "" && s.cfg != nil && s.configPath != "" {
+		s.configMu.Lock()
 		s.cfg.TMDB.APIKey = req.TMDBAPIKey
-		if err := config.Save(s.configPath, s.cfg); err != nil {
-			slog.Warn("保存 TMDB API Key 失败", "err", err)
+		saveErr := config.Save(s.configPath, s.cfg)
+		s.configMu.Unlock()
+		if saveErr != nil {
+			slog.Warn("保存 TMDB API Key 失败", "err", saveErr)
 		} else if s.reload != nil {
 			s.reload(s.cfg)
 		}

@@ -870,7 +870,15 @@ func (c *Client) SavePoster(ctx context.Context, r *Result) string {
 		return ""
 	}
 	defer f.Close()
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	// 限制海报大小，避免异常响应吃满内存
+	const maxPosterSize = 5 << 20 // 5 MB
+	limited := io.LimitReader(resp.Body, maxPosterSize+1)
+	if _, err := io.Copy(f, limited); err != nil {
+		os.Remove(dst)
+		return ""
+	}
+	if fi, err := f.Stat(); err == nil && fi.Size() > maxPosterSize {
+		os.Remove(dst)
 		return ""
 	}
 	return dst

@@ -41,6 +41,7 @@ const pushing = ref(false)
 const acting = ref<number | null>(null)
 const captionHtml = ref('')
 const captionPlain = ref('')
+const captionSegments = computed(() => parseCaptionSegments(captionHtml.value))
 let timer: number | undefined
 let loadTimer: number | undefined
 
@@ -126,6 +127,48 @@ async function loadCaption(id: number) {
     captionHtml.value = ''
     captionPlain.value = ''
   }
+}
+
+// 安全解析后端返回的 HTML 文案，只放行 <b>、<a>、<br>，其余一律当纯文本渲染。
+// 避免 v-html 直接渲染带来的 XSS 纵深防御隐患。
+interface CaptionSegment {
+  type: 'text' | 'bold' | 'link' | 'br'
+  content: string
+  href?: string
+}
+function parseCaptionSegments(html: string): CaptionSegment[] {
+  const segments: CaptionSegment[] = []
+  const tagRe = /<b>|<\/b>|<br\s*\/?>|<a\s+[^>]*>|<\/a>/gi
+  let lastIdx = 0
+  let bold = false
+  let linkHref: string | null = null
+  let m: RegExpExecArray | null
+
+  const flush = (text: string) => {
+    if (!text) return
+    if (linkHref !== null) {
+      segments.push({ type: 'link', content: text, href: linkHref })
+    } else if (bold) {
+      segments.push({ type: 'bold', content: text })
+    } else {
+      segments.push({ type: 'text', content: text })
+    }
+  }
+
+  while ((m = tagRe.exec(html)) !== null) {
+    flush(html.slice(lastIdx, m.index))
+    const tag = m[0].toLowerCase()
+    if (tag === '<b>') bold = true
+    else if (tag === '</b>') bold = false
+    else if (tag.startsWith('<a')) {
+      const hm = m[0].match(/href="([^"]*)"/i)
+      linkHref = hm ? hm[1] : ''
+    } else if (tag === '</a>') linkHref = null
+    else segments.push({ type: 'br', content: '' })
+    lastIdx = m.index + m[0].length
+  }
+  flush(html.slice(lastIdx))
+  return segments
 }
 
 // 选中项与列表刷新都可能换上不同的卡片，统一盯住当前条目的 ID
@@ -503,8 +546,15 @@ onUnmounted(() => {
               {{ current.error }}
             </span>
           </div>
-          <!-- 与 Telegram 实际收到的一致：标题 / 年份 / 简介 / 链接 / 提取码 / TMDB -->
-          <div v-if="captionHtml" class="whitespace-pre-line" v-html="captionHtml" />
+          <!-- 与 Telegram 实际收到一致：标题 / 年份 / 简介 / 链接 / 提取码 / TMDB -->
+          <div v-if="captionSegments.length" class="whitespace-pre-line text-[13px] leading-relaxed">
+            <template v-for="(seg, i) in captionSegments" :key="i">
+              <b v-if="seg.type === 'bold'">{{ seg.content }}</b>
+              <a v-else-if="seg.type === 'link'" :href="seg.href" target="_blank" rel="noopener noreferrer" class="text-[var(--color-brand)] underline">{{ seg.content }}</a>
+              <br v-else-if="seg.type === 'br'" />
+              <span v-else>{{ seg.content }}</span>
+            </template>
+          </div>
           <template v-else>
             <p class="font-medium">{{ current.title }}</p>
             <p class="text-xs text-[var(--color-muted)]">{{ current.overview }}</p>

@@ -136,3 +136,20 @@ func (s *Store) PublicStats(f model.PublicFilter) (model.PublicStats, error) {
 	}
 	return out, rows.Err()
 }
+
+// GetPublic 按 ID 查询单条已推送资源
+func (s *Store) GetPublic(id int64) (*model.PublicLink, error) {
+	var p model.PublicLink
+	err := s.db.QueryRow(
+		`SELECT `+publicColumns+` FROM links WHERE id = ? AND status = 'pushed'`, id,
+	).Scan(
+		&p.ID, &p.Title, &p.OriginalTitle, &p.Year, &p.MediaType, &p.TMDBID,
+		&p.Overview, &p.Genres, &p.VoteAverage, &p.Runtime, &p.PosterURL,
+		&p.URL, &p.Code, &p.SharedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	p.URL = safeLinkURL(p.URL)
+	return &p, nil
+}

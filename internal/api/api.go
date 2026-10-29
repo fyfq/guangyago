@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/odin/guangya-go/internal/config"
@@ -23,7 +24,8 @@ type Server struct {
 	store *store.Store
 	pipe  *pipeline.Pipeline
 	cfg   *config.Config
-	// configPath 配置文件路径，用于保存界面上填写的密钥
+	// configMu 保护 cfg 的并发读写，避免 settings/setup 与请求 handler 之间的数据竞争。
+	configMu   sync.RWMutex
 	configPath string
 	// reload 在配置变更后重建刮削与推送组件
 	reload func(*config.Config)
@@ -34,6 +36,18 @@ type Server struct {
 func New(s *store.Store) *Server {
 	return &Server{store: s, loginGuard: newLoginGuard()}
 }
+
+// LockConfig 加写锁保护 cfg 的并发修改。
+func (s *Server) LockConfig() { s.configMu.Lock() }
+
+// UnlockConfig 释放写锁。
+func (s *Server) UnlockConfig() { s.configMu.Unlock() }
+
+// RLockConfig 加读锁保护 cfg 的并发读取。
+func (s *Server) RLockConfig() { s.configMu.RLock() }
+
+// RUnlockConfig 释放读锁。
+func (s *Server) RUnlockConfig() { s.configMu.RUnlock() }
 
 // WithRuntime 注入管道、配置与热更新回调。
 func (s *Server) WithRuntime(p *pipeline.Pipeline, cfg *config.Config, path string, reload func(*config.Config)) *Server {
@@ -46,6 +60,12 @@ func (s *Server) Register(r *gin.Engine) {
 	r.GET("/api/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+
+	// SEO: robots.txt 和 sitemap.xml
+	r.GET("/robots.txt", s.robotsTXT)
+	r.GET("/sitemap.xml", s.sitemapXML)
+	r.GET("/api/structured-data", s.structuredData)
+	r.GET("/api/structured-data/:id", s.itemStructuredData)
 
 	// 公开接口：健康检查、登录、资源门户、安装向导
 	r.POST("/api/auth/login", s.login)

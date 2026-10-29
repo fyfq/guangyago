@@ -76,25 +76,27 @@ func main() {
 
 	// 运行期可替换的组件（改密钥或代理后重建）
 	var (
+		srv        *api.Server
 		pipe       *pipeline.Pipeline
 		tgNotifier *notifier.Notifier
 		botStop    context.CancelFunc
 	)
 
 	// startBot 以 long-polling 启动 Bot；配置变更时先停掉旧实例再重建。
-	startBot := func() {
+	// 所有 cfg 读取均在调用方加锁后完成，以局部变量传入闭包，避免 goroutine 无锁访问。
+	startBot := func(enableBot bool, noBotFlag bool, autoPush bool, nt *notifier.Notifier) {
 		if botStop != nil {
 			botStop()
 			botStop = nil
 		}
-		if !cfg.Telegram.EnableBot || *noBot || tgNotifier == nil {
+		if !enableBot || noBotFlag || nt == nil {
 			return
 		}
 		bctx, cancel := context.WithCancel(ctx)
 		botStop = cancel
 		go func() {
 			slog.Info("Telegram Bot 已启动，私聊发送链接即可录入")
-			tgNotifier.RunBot(bctx, func(text string) string {
+			nt.RunBot(bctx, func(text string) string {
 				entries, errs := parser.ParseText(text)
 				if len(entries) == 0 {
 					if len(errs) > 0 {
@@ -103,7 +105,7 @@ func main() {
 					return ""
 				}
 				res := api.New(st).Save(entries, errs)
-				if len(res.IDs) > 0 && cfg.Pipeline.AutoPush {
+				if len(res.IDs) > 0 && autoPush {
 					pipe.Enqueue("scrape", res.IDs)
 				}
 				return fmt.Sprintf("已录入 %d 条，重复 %d 条", res.Inserted, res.Skipped)
@@ -112,6 +114,9 @@ func main() {
 	}
 
 	build := func(c *config.Config) {
+		if srv != nil {
+			srv.LockConfig()
+		}
 		sc, err := scraper.New(c.TMDB, c.Storage.PosterDir, &c.Proxy, &c.Rate.TMDB)
 		if err != nil {
 			slog.Error("TMDB 客户端初始化失败", "err", err)
@@ -125,14 +130,22 @@ func main() {
 			slog.Warn("未配置 Telegram Bot Token，推送功能不可用")
 		}
 		tgNotifier = nt
+		enableBot := c.Telegram.EnableBot
+		autoPush := c.Pipeline.AutoPush
+		workers := c.Pipeline.Workers
+		guangyaLimit := c.Rate.Guangya.EffectiveConcurrency()
+		if srv != nil {
+			srv.UnlockConfig()
+		}
+
 		if pipe == nil {
 			pipe = pipeline.New(st, sc, nt)
-			pipe.Start(c.Pipeline.Workers)
+			pipe.Start(workers)
 		} else {
 			pipe.UpdateComponents(sc, nt)
 		}
-		pipe.SetGuangyaLimit(c.Rate.Guangya.EffectiveConcurrency())
-		startBot()
+		pipe.SetGuangyaLimit(guangyaLimit)
+		startBot(enableBot, *noBot, autoPush, tgNotifier)
 	}
 	build(cfg)
 
@@ -144,10 +157,11 @@ func main() {
 		slog.Warn("设置可信代理失败", "err", err)
 	}
 	r.Use(gin.Logger(), gin.Recovery(), securityHeaders(), limitBody())
-	api.New(st).WithRuntime(pipe, cfg, *configPath, func(c *config.Config) {
+	srv = api.New(st).WithRuntime(pipe, cfg, *configPath, func(c *config.Config) {
 		build(c)
 		slog.Info("配置已更新并重新加载")
-	}).Register(r)
+	})
+	srv.Register(r)
 
 	// 前端构建产物托管：非 /api 路径一律回落到 index.html
 	if fsys := web.FS(); fsys != nil {
@@ -166,10 +180,10 @@ func main() {
 		})
 	}
 
-	srv := &http.Server{Addr: cfg.Server.Addr, Handler: r}
+	httpSrv := &http.Server{Addr: cfg.Server.Addr, Handler: r}
 	go func() {
 		slog.Info("服务已启动", "addr", cfg.Server.Addr)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("服务异常退出", "err", err)
 			os.Exit(1)
 		}
@@ -179,7 +193,7 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("关闭服务时出错", "err", err)
 	}
 	slog.Info("已退出")

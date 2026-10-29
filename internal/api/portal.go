@@ -56,7 +56,7 @@ func (s *Server) portalLinks(c *gin.Context) {
 
 	f, err := portalFilter(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数不正确"})
 		return
 	}
 	f.Limit = limit
@@ -73,7 +73,7 @@ func (s *Server) portalLinks(c *gin.Context) {
 func (s *Server) portalStats(c *gin.Context) {
 	f, err := portalFilter(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数不正确"})
 		return
 	}
 	stats, err := s.store.PublicStats(f)

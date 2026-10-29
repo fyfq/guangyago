@@ -167,6 +167,21 @@ watch(sort, () => schedule(0))
 
 watch(detail, (d) => {
   document.body.style.overflow = d ? 'hidden' : ''
+  // 动态注入结构化数据
+  const existingScript = document.getElementById('structured-data')
+  if (existingScript) existingScript.remove()
+  if (d) {
+    fetch(`/api/structured-data/${d.id}`)
+      .then(res => res.json())
+      .then(data => {
+        const script = document.createElement('script')
+        script.id = 'structured-data'
+        script.type = 'application/ld+json'
+        script.textContent = JSON.stringify(data)
+        document.head.appendChild(script)
+      })
+      .catch(() => {})
+  }
 })
 
 onMounted(async () => {
@@ -181,6 +196,16 @@ onMounted(async () => {
   } catch {
     // 接口异常继续
   }
+  // 注入站点级别的结构化数据
+  fetch('/api/structured-data')
+    .then(res => res.json())
+    .then(data => {
+      const script = document.createElement('script')
+      script.type = 'application/ld+json'
+      script.textContent = JSON.stringify(data)
+      document.head.appendChild(script)
+    })
+    .catch(() => {})
   window.addEventListener('keydown', onKey)
   load()
 })
@@ -189,6 +214,9 @@ onUnmounted(() => {
   window.clearTimeout(timer)
   window.removeEventListener('keydown', onKey)
   document.body.style.overflow = ''
+  // 清理结构化数据
+  const existingScript = document.getElementById('structured-data')
+  if (existingScript) existingScript.remove()
 })
 </script>
 

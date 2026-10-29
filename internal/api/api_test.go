@@ -21,16 +21,16 @@ func TestValidPassword(t *testing.T) {
 		want bool
 	}{
 		{"", false},
-		{"short1", false},                     // 7 字节
-		{"abcdefgh", false},                   // 单一类别
-		{"12345678", false},                   // 黑名单
-		{"PASSWORD1", false},                  // 黑名单（大小写不敏感）
-		{"admin123", false},                   // 黑名单
-		{"hunter2-hunter2", true},             // lower + digit + symbol
-		{"Abcdefg1", true},                    // 3 类
-		{"Abcdefgh", true},                    // upper + lower
-		{strings.Repeat("A1", 64), true},      // 128 字节
-		{strings.Repeat("A1", 65), false},     // 129 字节超限
+		{"short1", false},                 // 7 字节
+		{"abcdefgh", false},               // 单一类别
+		{"12345678", false},               // 黑名单
+		{"PASSWORD1", false},              // 黑名单（大小写不敏感）
+		{"admin123", false},               // 黑名单
+		{"hunter2-hunter2", true},         // lower + digit + symbol
+		{"Abcdefg1", true},                // 3 类
+		{"Abcdefgh", true},                // upper + lower
+		{strings.Repeat("A1", 64), true},  // 128 字节
+		{strings.Repeat("A1", 65), false}, // 129 字节超限
 	}
 	for _, c := range cases {
 		if got := validPassword(c.p); got != c.want {
@@ -60,10 +60,10 @@ func TestSanitizeCanonicalPath(t *testing.T) {
 		{"/", "/"},
 		{"/admin/users", "/admin/users"},
 		{"/a b/c", "/ab/c"},
-		{`/"><script>`, "/script"},                // 尖括号/引号丢弃，字母保留
-		{"/a%20b", "/a20b"},                        // % 不在白名单被丢弃，数字保留
-		{"/~user_1.0-v", "/~user_1.0-v"},           // RFC 3986 未保留字符全通过
-		{"foo", "/foo"},                            // 无 / 前缀时补齐
+		{`/"><script>`, "/script"},       // 尖括号/引号丢弃，字母保留
+		{"/a%20b", "/a20b"},              // % 不在白名单被丢弃，数字保留
+		{"/~user_1.0-v", "/~user_1.0-v"}, // RFC 3986 未保留字符全通过
+		{"foo", "/foo"},                  // 无 / 前缀时补齐
 	}
 	for _, c := range cases {
 		if got := sanitizeCanonicalPath(c.in); got != c.want {

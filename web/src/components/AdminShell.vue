@@ -24,7 +24,6 @@ import { branding } from '../lib/branding'
 
 type Tab = 'import' | 'scrape' | 'library' | 'push' | 'settings' | 'users' | 'seo'
 
-const tab = ref<Tab>('library')
 const stats = ref<Record<string, number>>({})
 const initialStatus = ref('')
 // 每次跳转换一个 key，保证重复点击同一入口也会重新挂载并刷新列表、
@@ -48,6 +47,24 @@ const allTabs: { key: Tab; label: string; step?: number; icon?: Component; admin
 const tabs = computed(() => allTabs.filter((t) => !t.adminOnly || me.value?.role === 'admin'))
 const isAdmin = computed(() => me.value?.role === 'admin')
 
+// 当前标签写进查询串，刷新或登录回跳都能停在原页面；资源库是默认标签，不占 URL
+const defaultTab: Tab = 'library'
+
+function tabFromURL(): Tab {
+  const t = new URLSearchParams(location.search).get('tab')
+  return t && allTabs.some((x) => x.key === t) ? (t as Tab) : defaultTab
+}
+
+const tab = ref<Tab>(tabFromURL())
+
+function syncURL() {
+  const p = new URLSearchParams(location.search)
+  if (tab.value === defaultTab) p.delete('tab')
+  else p.set('tab', tab.value)
+  const qs = p.toString()
+  history.replaceState(null, '', qs ? `${location.pathname}?${qs}` : location.pathname)
+}
+
 function loginURL() {
   return `/login?next=${encodeURIComponent(location.pathname + location.search)}`
 }
@@ -57,6 +74,11 @@ async function checkAuth() {
   authError.value = ''
   try {
     me.value = await api.me()
+    // 非管理员直接打开 ?tab=seo 这类地址时退回默认标签
+    if (!tabs.value.some((t) => t.key === tab.value)) {
+      tab.value = defaultTab
+      syncURL()
+    }
     await loadStats()
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
@@ -83,6 +105,7 @@ const overview = [
   { key: 'pushed', label: '已推送', target: 'library', status: 'pushed', sum: ['pushed'] },
 ] as const
 
+
 function count(o: { sum: readonly string[] }) {
   return o.sum.reduce((n, k) => n + (stats.value[k] ?? 0), 0)
 }
@@ -99,6 +122,7 @@ function go(next: string, status = '') {
   initialStatus.value = status
   tab.value = next as Tab
   navSeq.value++
+  syncURL()
   loadStats()
 }
 
@@ -206,12 +230,12 @@ watch(() => branding.site_name, syncTitle)
     </header>
 
     <main class="mx-auto max-w-7xl px-6 py-6">
-      <Card v-if="tab !== 'users'" class="mb-5">
-        <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <Card v-if="tab === 'import' || tab === 'scrape' || tab === 'push'" class="mb-5 p-3">
+        <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <button
             v-for="o in overview"
             :key="o.key"
-            class="rounded-lg bg-[var(--color-surface-sunken)] p-3 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+            class="flex items-center justify-between gap-3 rounded-lg bg-[var(--color-surface-sunken)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
             :title="
               o.target === 'scrape'
                 ? `到刮削队列处理${o.label}的记录`
@@ -222,7 +246,7 @@ watch(() => branding.site_name, syncTitle)
             @click="go(o.target, o.status)"
           >
             <p class="text-[13px] text-[var(--color-muted)]">{{ o.label }}</p>
-            <p class="text-2xl font-medium">{{ count(o) }}</p>
+            <p class="text-xl font-medium tabular-nums">{{ count(o) }}</p>
           </button>
         </div>
       </Card>

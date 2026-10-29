@@ -38,7 +38,8 @@ type SEOConfig struct {
 	// 留空则按请求头推断；反向代理后建议固定，否则 sitemap 里的域名可能不准。
 	BaseURL string `yaml:"base_url"`
 	// SiteName 出现在结构化数据与站点地图说明中。
-	SiteName string `yaml:"site_name"`
+	SiteName     string `yaml:"site_name"`
+	SiteSubtitle string `yaml:"site_subtitle"`
 	// LogoFile / IconFile 是后台上传的自定义 logo、站点图标在 branding 目录下的文件名
 	//（如 logo.png）。只存文件名：静态路由按白名单精确匹配后回源，避免拼接任意路径。
 	// 留空表示用前端内置的默认标识。
@@ -268,7 +269,7 @@ func Default() *Config {
 			AutoPush:   true,
 		},
 		Proxy: ProxyConfig{Enable: false},
-		SEO:   SEOConfig{SiteName: "光鸭 GO"},
+		SEO:   SEOConfig{SiteName: "光鸭 GO", SiteSubtitle: "资源库"},
 		Rate: RateConfig{
 			TMDB: TMDBRate{
 				Enable:    true,

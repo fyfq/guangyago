@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Cloud,
   Search,
+  Share2,
   X,
   Loader2,
   Inbox,
@@ -33,6 +34,27 @@ const loading = ref(false)
 const loadingMore = ref(false)
 const error = ref('')
 const detail = ref<PortalLink | null>(null)
+const overviewExpanded = ref(false)
+const overviewElement = ref<HTMLElement | null>(null)
+const overviewOverflow = ref(false)
+const overviewObserver = new ResizeObserver(() => {
+  const el = overviewElement.value
+  if (el && !overviewExpanded.value) {
+    overviewOverflow.value = el.scrollHeight > el.clientHeight
+  }
+})
+watch(overviewElement, (el) => {
+  overviewObserver.disconnect()
+  if (el) overviewObserver.observe(el)
+}, { flush: 'post' })
+watch(() => detail.value?.id, async () => {
+  overviewExpanded.value = false
+  overviewOverflow.value = false
+  await nextTick()
+  const el = overviewElement.value
+  if (el) overviewOverflow.value = el.scrollHeight > el.clientHeight
+})
+
 
 let loadSeq = 0
 let statsSeq = 0
@@ -320,6 +342,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  overviewObserver.disconnect()
   window.clearTimeout(timer)
   window.clearTimeout(urlTimer)
   window.removeEventListener('popstate', onPopState)
@@ -348,7 +371,7 @@ onUnmounted(() => {
           </div>
           <div>
             <p class="text-[15px] font-medium leading-tight">{{ branding.site_name }}</p>
-            <p class="text-xs leading-tight text-[var(--color-muted)]">资源库</p>
+            <p v-if="branding.site_subtitle" class="text-xs leading-tight text-[var(--color-muted)]">{{ branding.site_subtitle }}</p>
           </div>
         </div>
         <p class="text-[13px] text-[var(--color-muted)]">
@@ -358,34 +381,9 @@ onUnmounted(() => {
     </header>
 
     <section class="border-b border-[var(--color-line)] bg-[var(--color-surface)]">
-      <div class="mx-auto max-w-2xl px-6 pb-6 pt-9 sm:pb-7">
-        <div class="text-center">
-          <h1 class="text-3xl tracking-tight sm:text-4xl">光鸭片库</h1>
-          <p class="mt-2 text-[13px] text-[var(--color-muted)]">
-            已发布到频道的资源，搜索片名就能找到分享链接
-          </p>
-        </div>
-
-        <div class="relative mt-6">
-          <Search class="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-faint)]" />
-          <input
-            v-model="keyword"
-            class="h-11 w-full rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface)] pl-10 pr-10 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:border-[var(--color-brand)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-line)]"
-            placeholder="搜索片名 / 原名 / 类型"
-            aria-label="搜索资源"
-          />
-          <button
-            v-if="keyword"
-            class="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-[var(--color-faint)] hover:text-[var(--color-ink)]"
-            aria-label="清空搜索"
-            @click="keyword = ''"
-          >
-            <X class="h-4 w-4" />
-          </button>
-        </div>
-
-        <div class="mt-3.5 flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-          <div class="flex flex-wrap items-center justify-center gap-1">
+      <div class="mx-auto max-w-7xl px-6 py-5">
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-3">
+          <div class="flex shrink-0 items-center gap-1 whitespace-nowrap">
             <button
               v-for="f in filters"
               :key="f.value"
@@ -402,10 +400,10 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <div class="flex items-center justify-center gap-1.5">
-            <div class="flex items-center gap-0.5 rounded-full bg-[var(--color-surface-sunken)] p-0.5">
+          <div class="flex max-w-full flex-wrap items-center gap-2 whitespace-nowrap">
+            <div class="flex shrink-0 items-center gap-0.5 rounded-full bg-[var(--color-surface-sunken)] p-0.5">
               <button
-                class="rounded-full px-2.5 py-1 text-[13px] transition-colors"
+                class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1.5 text-[13px] transition-colors"
                 :class="
                   sort === 'new'
                     ? 'bg-[var(--color-surface)] font-medium text-[var(--color-ink)] shadow-sm'
@@ -413,10 +411,11 @@ onUnmounted(() => {
                 "
                 @click="sort = 'new'"
               >
+                <Share2 class="h-3.5 w-3.5" />
                 最新分享
               </button>
               <button
-                class="flex items-center gap-1 rounded-full px-2.5 py-1 text-[13px] transition-colors"
+                class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1.5 text-[13px] transition-colors"
                 :class="
                   sort === 'release'
                     ? 'bg-[var(--color-surface)] font-medium text-[var(--color-ink)] shadow-sm'
@@ -428,7 +427,7 @@ onUnmounted(() => {
                 上映时间
               </button>
               <button
-                class="flex items-center gap-1 rounded-full px-2.5 py-1 text-[13px] transition-colors"
+                class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1.5 text-[13px] transition-colors"
                 :class="
                   sort === 'rating'
                     ? 'bg-[var(--color-surface)] font-medium text-[var(--color-ink)] shadow-sm'
@@ -444,7 +443,7 @@ onUnmounted(() => {
             <div class="relative">
               <select
                 v-model.number="year"
-                class="h-8 cursor-pointer appearance-none rounded-full border pl-3 pr-8 text-[13px] transition-colors focus:border-[var(--color-brand)] focus:outline-none"
+                class="h-9 w-36 cursor-pointer appearance-none rounded-full border pl-3 pr-8 text-[13px] transition-colors focus:border-[var(--color-brand)] focus:outline-none"
                 :class="
                   year
                     ? 'border-[var(--color-brand-line)] bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand)]'
@@ -470,6 +469,24 @@ onUnmounted(() => {
               @click="resetFilters"
             >
               <RotateCcw class="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <div class="relative min-w-0 flex-1 basis-full sm:basis-56">
+            <Search class="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-faint)]" />
+            <input
+              v-model="keyword"
+              class="h-9 w-full rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface)] pl-10 pr-10 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:border-[var(--color-brand)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-line)]"
+              placeholder="搜索片名 / 原名 / 类型"
+              aria-label="搜索资源"
+            />
+            <button
+              v-if="keyword"
+              class="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-[var(--color-faint)] hover:text-[var(--color-ink)]"
+              aria-label="清空搜索"
+              @click="keyword = ''"
+            >
+              <X class="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -592,7 +609,7 @@ onUnmounted(() => {
           <X class="h-4 w-4" />
         </button>
 
-        <div class="grid gap-5 sm:grid-cols-[190px_1fr]">
+        <div class="grid gap-5 sm:grid-cols-[220px_minmax(0,1fr)]">
           <div class="mx-auto w-40 sm:mx-0 sm:w-full">
             <div
               class="aspect-[2/3] overflow-hidden rounded-lg border border-[var(--color-line)] bg-[var(--color-surface-hover)]"
@@ -606,7 +623,7 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div class="min-w-0">
+          <div class="flex min-w-0 flex-col" :class="overviewExpanded ? 'sm:min-h-[330px]' : 'sm:h-[330px]'">
             <div class="flex flex-wrap items-center gap-1.5 pr-8">
               <Badge v-if="mediaMeta[detail.media_type]" :class="mediaMeta[detail.media_type].cls">
                 {{ mediaMeta[detail.media_type].label }}
@@ -633,15 +650,31 @@ onUnmounted(() => {
               {{ genresText(detail) }}
             </p>
 
-            <p class="mt-3 whitespace-pre-line text-[13px] leading-relaxed text-[var(--color-muted)]">
-              {{ detail.overview || '暂无简介' }}
-            </p>
+            <div class="mt-3 flex min-h-0 flex-1 flex-col">
+              <p
+                id="portal-overview"
+                ref="overviewElement"
+                class="whitespace-pre-line text-[13px] leading-relaxed text-[var(--color-muted)]"
+                :class="overviewExpanded ? '' : 'line-clamp-4 max-h-24 overflow-hidden'"
+              >
+                {{ detail.overview || '暂无简介' }}
+              </p>
+              <button
+                v-if="overviewOverflow || overviewExpanded"
+                class="mt-1 shrink-0 self-start text-xs text-[var(--color-brand)] hover:underline"
+                :aria-expanded="overviewExpanded"
+                aria-controls="portal-overview"
+                @click="overviewExpanded = !overviewExpanded"
+              >
+                {{ overviewExpanded ? '收起简介' : '展开简介' }}
+              </button>
+            </div>
 
-            <div v-if="detail.code" class="mt-4 rounded-lg bg-[var(--color-surface-sunken)] p-3 text-[13px]">
+            <div v-if="detail.code" class="mt-3 shrink-0 rounded-lg bg-[var(--color-surface-sunken)] p-3 text-[13px]">
               提取码 <span class="font-mono font-medium">{{ detail.code }}</span>
             </div>
 
-            <div class="mt-4 flex flex-wrap items-center gap-2">
+            <div class="mt-3 flex shrink-0 flex-wrap items-center gap-2">
               <Button v-if="detail.url" size="sm" @click="copyLink(detail)">
                 <Copy class="h-4 w-4" />
                 复制链接{{ detail.code ? '与提取码' : '' }}

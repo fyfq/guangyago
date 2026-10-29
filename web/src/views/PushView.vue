@@ -33,7 +33,6 @@ const status = ref('push_set')
 const page = ref(0)
 const selected = ref<number[]>([])
 const selectedId = ref<number | null>(null)
-const readyCount = ref(0)
 const failedCount = ref(0)
 const progress = ref<TaskProgress | null>(null)
 const settings = ref<Settings | null>(null)
@@ -94,7 +93,6 @@ async function loadList() {
     if (seq !== loadSeq) return
     items.value = res.items
     total.value = res.total
-    readyCount.value = stats.scraped ?? 0
     failedCount.value = stats.push_failed ?? 0
     selected.value = []
     // 当前预览项不在新列表里时，优先落到第一条待推送
@@ -334,9 +332,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="grid gap-5 lg:grid-cols-[1.1fr_1fr] lg:items-start">
-    <div class="space-y-5">
-      <Card title="推送频道" desc="刮削完成但还没发到频道的记录都在这里">
+  <div class="grid gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]"
+    :class="items.length ? 'items-start' : 'items-stretch'">
+      <Card class="min-w-0 lg:col-span-2" title="推送频道" desc="刮削完成但还没发到频道的记录都在这里">
         <div
           v-if="settings && !settings.telegram_configured"
           class="mb-4 flex items-start gap-2 rounded-lg bg-[var(--color-warn-soft)] px-3 py-2.5 text-[13px] text-[var(--color-warn)]"
@@ -345,34 +343,22 @@ onUnmounted(() => {
           <span>还没有配置 Bot Token 或频道 ID，先去「设置」页填写。</span>
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
-          <div class="rounded-lg border border-[var(--color-line)] p-3">
-            <p class="text-[13px] text-[var(--color-muted)]">待推送</p>
-            <p class="text-2xl font-medium">{{ readyCount }}</p>
-          </div>
-          <div class="rounded-lg border border-[var(--color-line)] p-3">
-            <p class="text-[13px] text-[var(--color-muted)]">推送失败</p>
-            <p class="text-2xl font-medium" :class="failedCount ? 'text-[var(--color-warn)]' : ''">
-              {{ failedCount }}
-            </p>
-          </div>
-        </div>
-
-        <div class="mt-4 flex flex-wrap items-center gap-2">
-          <Button :disabled="pushing || running || !total" @click="pushFiltered">
+        <div class="flex flex-wrap items-center gap-2">
+          <Button class="shrink-0 whitespace-nowrap" :disabled="pushing || running || !total" @click="pushFiltered">
             <Loader2 v-if="pushing || running" class="h-4 w-4 animate-spin" />
             <Send v-else class="h-4 w-4" />
             推送当前筛选（{{ total }}）
           </Button>
           <Button
             variant="outline"
+            class="shrink-0 whitespace-nowrap"
             :disabled="pushing || running || !selected.length"
             @click="pushSelected"
           >
             <Send class="h-4 w-4" />
             推送所选 {{ selected.length || '' }}
           </Button>
-          <Button variant="outline" :disabled="pushing || running || !failedCount" @click="retryFailed">
+          <Button class="shrink-0 whitespace-nowrap" variant="outline" :disabled="pushing || running || !failedCount" @click="retryFailed">
             <RotateCcw class="h-4 w-4" />
             重试推送失败（{{ failedCount }}）
           </Button>
@@ -383,33 +369,33 @@ onUnmounted(() => {
         </div>
       </Card>
 
-      <Card>
+      <Card class="flex min-w-0 flex-col">
         <template #title>
           <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
+            <div class="flex flex-wrap items-baseline gap-2">
               <h2 class="text-[15px] font-medium">待推送列表</h2>
-              <span class="ml-2 text-[13px] font-normal text-[var(--color-muted)]">共 {{ total }} 条</span>
+              <span class="text-[13px] font-normal text-[var(--color-muted)]">共 {{ total }} 条</span>
             </div>
             <button
               class="flex items-center gap-1 text-[13px] text-[var(--color-brand)] hover:underline"
               @click="emit('goto', 'library')"
             >
               <Library class="h-3.5 w-3.5" />
-              推送完成的去资源库回看 →
+              查看资源库 →
             </button>
           </div>
         </template>
 
         <div class="flex flex-wrap items-center gap-2">
-          <div class="relative w-full max-w-xs">
+          <div class="relative min-w-0 flex-1 basis-52">
             <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-faint)]" />
             <Input v-model="keyword" class="pl-9" placeholder="搜索片名 / 链接" />
           </div>
-          <div class="flex flex-wrap gap-1.5">
+          <div class="flex shrink-0 flex-wrap gap-1.5">
             <button
               v-for="f in filters"
               :key="f.value"
-              class="rounded-full px-3 py-1 text-[13px] transition-colors"
+              class="h-9 whitespace-nowrap rounded-full px-3 text-[13px] transition-colors"
               :class="
                 status === f.value
                   ? 'bg-[var(--color-brand-soft)] text-[var(--color-brand)] font-medium'
@@ -438,7 +424,7 @@ onUnmounted(() => {
           <Loader2 class="mx-auto h-5 w-5 animate-spin" />
         </div>
 
-        <div v-else-if="!items.length" class="py-12 text-center">
+        <div v-else-if="!items.length" class="flex flex-1 flex-col items-center justify-center py-12 text-center">
           <Inbox class="mx-auto h-8 w-8 text-[var(--color-faint)]" />
           <p class="mt-3 text-[13px] text-[var(--color-muted)]">{{ emptyText }}</p>
           <Button class="mx-auto mt-4" size="sm" @click="emit('goto', 'scrape')">
@@ -518,10 +504,9 @@ onUnmounted(() => {
           </div>
         </div>
       </Card>
-    </div>
 
-    <Card class="lg:sticky lg:top-5" title="卡片预览" desc="实际推送到频道的效果">
-      <div v-if="!current" class="flex h-40 items-center justify-center text-[13px] text-[var(--color-faint)]">
+    <Card class="flex min-w-0 flex-col lg:sticky lg:top-5" title="卡片预览" desc="实际推送到频道的效果">
+      <div v-if="!current" class="flex min-h-64 flex-1 items-center justify-center rounded-lg border border-dashed border-[var(--color-line-strong)] bg-[var(--color-surface-sunken)] px-4 text-center text-[13px] text-[var(--color-faint)]">
         暂无待推送记录
       </div>
       <div

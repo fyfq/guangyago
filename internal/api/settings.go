@@ -46,6 +46,7 @@ func (s *Server) settings(c *gin.Context) {
 	googleVerification := cfg.SEO.GoogleVerification
 	seoBaseURL := cfg.SEO.BaseURL
 	siteName := cfg.SEO.SiteName
+	siteSubtitle := cfg.SEO.SiteSubtitle
 	s.configMu.RUnlock()
 
 	c.JSON(http.StatusOK, gin.H{
@@ -83,6 +84,7 @@ func (s *Server) settings(c *gin.Context) {
 			"google_verification": googleVerification,
 			"base_url":            seoBaseURL,
 			"site_name":           siteName,
+			"site_subtitle":       siteSubtitle,
 		},
 	})
 }
@@ -123,6 +125,7 @@ type settingsRequest struct {
 		GoogleVerification *string `json:"google_verification"`
 		BaseURL            *string `json:"base_url"`
 		SiteName           *string `json:"site_name"`
+		SiteSubtitle       *string `json:"site_subtitle"`
 	} `json:"seo"`
 }
 
@@ -233,6 +236,9 @@ func (s *Server) updateSettings(c *gin.Context) {
 				return
 			}
 			cfg.SEO.BaseURL = base
+		}
+		if seo.SiteSubtitle != nil {
+			cfg.SEO.SiteSubtitle = strings.TrimSpace(*seo.SiteSubtitle)
 		}
 		if seo.SiteName != nil {
 			cfg.SEO.SiteName = strings.TrimSpace(*seo.SiteName)

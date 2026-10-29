@@ -49,9 +49,10 @@ var brandingContentTypes = map[string]string{
 
 // brandingPayload 是前端与原始 HTML 共用的品牌信息：站点标题、logo、站点图标。
 type brandingPayload struct {
-	SiteName string `json:"site_name"`
-	LogoURL  string `json:"logo_url"`
-	IconURL  string `json:"icon_url"`
+	SiteName     string `json:"site_name"`
+	SiteSubtitle string `json:"site_subtitle"`
+	LogoURL      string `json:"logo_url"`
+	IconURL      string `json:"icon_url"`
 }
 
 // brandingSnapshot 读取品牌配置。站点名沿用 siteName() 的默认值兜底，
@@ -118,10 +119,17 @@ func (s *Server) applySiteName(doc string) string {
 // currentBranding 组装当前品牌信息，GET 接口与上传成功后的回包共用。
 func (s *Server) currentBranding() brandingPayload {
 	site, logo, icon, dir := s.brandingSnapshot()
+	s.configMu.RLock()
+	subtitle := "资源库"
+	if s.cfg != nil {
+		subtitle = strings.TrimSpace(s.cfg.SEO.SiteSubtitle)
+	}
+	s.configMu.RUnlock()
 	return brandingPayload{
-		SiteName: site,
-		LogoURL:  brandingHref(dir, logo),
-		IconURL:  brandingHref(dir, icon),
+		SiteSubtitle: subtitle,
+		SiteName:     site,
+		LogoURL:      brandingHref(dir, logo),
+		IconURL:      brandingHref(dir, icon),
 	}
 }
 

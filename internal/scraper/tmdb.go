@@ -429,15 +429,20 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 		if c.bearer {
 			req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		}
+		start := time.Now()
 		resp, err := c.http.Do(req)
 		if err != nil {
+			slog.Warn("TMDB 请求失败", "path", path, "attempt", attempt, "err", err)
 			return err
 		}
 		body, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes))
 		resp.Body.Close()
 		if err != nil {
+			slog.Warn("读取 TMDB 响应失败", "path", path, "attempt", attempt, "err", err)
 			return err
 		}
+		slog.Debug("TMDB 请求", "path", path, "attempt", attempt,
+			"status", resp.StatusCode, "elapsed_ms", since(start))
 		if resp.StatusCode == http.StatusOK {
 			return json.Unmarshal(body, out)
 		}
@@ -447,6 +452,8 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 		// 官方要求：收到 429 就应当退让，按 Retry-After 等待后重试
 		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxAttempts {
 			if wait := retryAfter(resp.Header.Get("Retry-After")); wait > 0 {
+				slog.Warn("TMDB 限流，退让后重试", "path", path, "attempt", attempt,
+					"retry_after_ms", wait.Milliseconds())
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -879,6 +886,8 @@ func (c *Client) Search(ctx context.Context, title, rawTitle string, year int) (
 	if bestScore < 0 {
 		return nil, fmt.Errorf("搜索结果中没有影视条目：%s", title)
 	}
+	slog.Debug("TMDB 搜索选中候选", "query", queries[0], "tmdb_id", best.ID,
+		"media_type", best.MediaType, "title", best.displayTitle(), "score", bestScore)
 	// 搜索已确定类型，取详情时必须带上，否则又会被按电影优先重判
 	return c.Fetch(ctx, best.ID, MatchRef{Title: title, RawTitle: rawTitle, Year: year, Hint: best.MediaType})
 }
@@ -889,6 +898,7 @@ func (c *Client) SavePoster(ctx context.Context, r *Result) string {
 		return ""
 	}
 	if err := os.MkdirAll(c.posterDir, 0o750); err != nil {
+		slog.Warn("创建海报目录失败", "dir", c.posterDir, "err", err)
 		return ""
 	}
 	name := fmt.Sprintf("%s-%d.jpg", r.MediaType, r.TMDBID)
@@ -898,22 +908,28 @@ func (c *Client) SavePoster(ctx context.Context, r *Result) string {
 	}
 	// 海报走的是 image.tmdb.org，同样纳入 TMDB 限流，避免批量刮削时打满
 	if err := c.limiter.Wait(ctx); err != nil {
+		slog.Warn("海报下载等待限流失败", "url", r.PosterURL, "err", err)
 		return ""
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.PosterURL, nil)
 	if err != nil {
+		slog.Warn("构造海报请求失败", "url", r.PosterURL, "err", err)
 		return ""
 	}
+	start := time.Now()
 	resp, err := c.http.Do(req)
 	if err != nil {
+		slog.Warn("海报下载失败", "url", r.PosterURL, "err", err)
 		return ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		slog.Warn("海报下载失败", "url", r.PosterURL, "status", resp.StatusCode)
 		return ""
 	}
 	f, err := os.Create(dst)
 	if err != nil {
+		slog.Warn("创建海报文件失败", "path", dst, "err", err)
 		return ""
 	}
 	defer f.Close()
@@ -921,13 +937,16 @@ func (c *Client) SavePoster(ctx context.Context, r *Result) string {
 	const maxPosterSize = 5 << 20 // 5 MB
 	limited := io.LimitReader(resp.Body, maxPosterSize+1)
 	if _, err := io.Copy(f, limited); err != nil {
+		slog.Warn("写入海报文件失败", "path", dst, "err", err)
 		os.Remove(dst)
 		return ""
 	}
 	if fi, err := f.Stat(); err == nil && fi.Size() > maxPosterSize {
+		slog.Warn("海报超过大小上限，已丢弃", "path", dst, "limit_bytes", maxPosterSize)
 		os.Remove(dst)
 		return ""
 	}
+	slog.Debug("海报已缓存", "path", dst, "elapsed_ms", since(start))
 	return dst
 }
 

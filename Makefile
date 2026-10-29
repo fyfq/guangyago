@@ -49,6 +49,7 @@ web:
 	cd web && npm run build
 	rm -rf internal/web/dist
 	cp -r web/dist internal/web/dist
+	@touch internal/web/dist/.gitkeep
 
 # 覆盖率报告，只看整体百分比即可
 cover:

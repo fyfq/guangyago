@@ -1,7 +1,9 @@
 package pipeline
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -196,10 +198,47 @@ func TestPush_SuccessRecordsMessageID(t *testing.T) {
 	if got.Status != model.StatusPushed || got.TGMessageID != 4242 {
 		t.Errorf("状态/消息 ID 未回写: %q %d", got.Status, got.TGMessageID)
 	}
-	// 无海报时 Send 直接走 sendPhoto（空图片）这一条主路径，不应出现文本回退
+	// 无海报时直接发纯文本，不应尝试 sendPhoto（空图片会被 Telegram 当 file_id 拒掉）
 	for _, m := range calls() {
-		if m == "sendMessage" {
-			t.Error("海报发送未失败，不应回退到 sendMessage")
+		if m == "sendPhoto" {
+			t.Error("无海报时不应调用 sendPhoto")
+		}
+	}
+}
+
+// 推送失败必须留下可检索的日志：记录 id 与 Telegram 原始报错，便于事后定位。
+func TestPush_FailureLogged(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		w.Header().Set("Content-Type", "application/json")
+		if method == "getMe" {
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":77,"is_bot":true,"first_name":"光鸭","username":"guangya_bot"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: wrong remote file identifier specified"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	p, st := newSeamPipeline(t, nil, seamNotifier(t, srv.URL))
+	l := seamSeed(t, st, "push-log", "肖申克的救赎 (1994)", model.StatusScraped)
+	l.TMDBID = 278
+	if err := st.UpdateScraped(l.ID, l); err != nil {
+		t.Fatalf("UpdateScraped: %v", err)
+	}
+
+	p.Enqueue("push", []int64{l.ID})
+	if pr := seamWait(t, p, "push"); pr.Failed != 1 {
+		t.Fatalf("推送应失败: %+v", pr)
+	}
+	out := buf.String()
+	for _, want := range []string{"推送失败", "wrong remote file identifier"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("失败日志缺少 %q: %s", want, out)
 		}
 	}
 }

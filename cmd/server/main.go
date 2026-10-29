@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/odin/guangya-go/internal/api"
 	"github.com/odin/guangya-go/internal/auth"
 	"github.com/odin/guangya-go/internal/config"
+	"github.com/odin/guangya-go/internal/logging"
 	"github.com/odin/guangya-go/internal/model"
 	"github.com/odin/guangya-go/internal/notifier"
 	"github.com/odin/guangya-go/internal/parser"
@@ -53,6 +55,22 @@ func main() {
 		cfg.Server.Addr = *addr
 	}
 
+	// 日志同时写标准输出与数据目录下的滚动文件：容器里看 docker logs，
+	// 需要排查时在设置页直接下载文件。
+	dataDir := cfg.Storage.DataDir
+	if dataDir == "" {
+		dataDir = filepath.Dir(cfg.Storage.DSN)
+	}
+	logPath := ""
+	if lw, err := logging.New(filepath.Join(dataDir, "logs"), maxLogBytes, maxLogBackups); err != nil {
+		slog.Warn("日志文件不可用，仅输出到标准输出", "err", err)
+	} else {
+		defer lw.Close()
+		slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stdout, lw),
+			&slog.HandlerOptions{Level: level})))
+		logPath = lw.Path()
+	}
+
 	st, err := store.Open(cfg.Storage.DSN)
 	if err != nil {
 		slog.Error("数据库打开失败", "err", err)
@@ -61,10 +79,6 @@ func main() {
 	defer st.Close()
 
 	// 加载或首次生成会话密钥（HMAC-SHA256 令牌摘要）；文件位于 DataDir 下，权限 0600。
-	dataDir := cfg.Storage.DataDir
-	if dataDir == "" {
-		dataDir = filepath.Dir(cfg.Storage.DSN)
-	}
 	if key, err := auth.LoadOrCreateSessionKey(dataDir); err != nil {
 		slog.Warn("会话密钥不可用，退化为裸 SHA-256 摘要", "err", err)
 	} else {
@@ -112,6 +126,7 @@ func main() {
 				entries, errs := parser.ParseText(text)
 				if len(entries) == 0 {
 					if len(errs) > 0 {
+						slog.Debug("Bot 消息未识别到链接", "rows", len(errs))
 						return "没识别到光鸭链接，发我分享内容就行。"
 					}
 					return ""
@@ -120,6 +135,8 @@ func main() {
 				if len(res.IDs) > 0 && autoPush {
 					pipe.Enqueue("scrape", res.IDs)
 				}
+				slog.Info("Bot 消息已录入", "inserted", res.Inserted,
+					"skipped", res.Skipped, "auto_scrape", autoPush)
 				return fmt.Sprintf("已录入 %d 条，重复 %d 条", res.Inserted, res.Skipped)
 			})
 		}()
@@ -146,6 +163,9 @@ func main() {
 		autoPush := c.Pipeline.AutoPush
 		workers := c.Pipeline.Workers
 		guangyaLimit := c.Rate.Guangya.EffectiveConcurrency()
+		slog.Info("运行配置已加载", "addr", c.Server.Addr, "db", c.Storage.DSN,
+			"workers", workers, "auto_push", autoPush, "bot_enabled", enableBot,
+			"tmdb_ready", sc != nil, "telegram_ready", nt != nil)
 		if srv != nil {
 			srv.UnlockConfig()
 		}
@@ -168,11 +188,11 @@ func main() {
 	if err := r.SetTrustedProxies(nil); err != nil {
 		slog.Warn("设置可信代理失败", "err", err)
 	}
-	r.Use(gin.Logger(), gin.Recovery(), securityHeaders(), limitBody())
+	r.Use(requestLog(), gin.Recovery(), securityHeaders(), limitBody())
 	srv = api.New(st).WithRuntime(pipe, cfg, *configPath, func(c *config.Config) {
 		build(c)
 		slog.Info("配置已更新并重新加载")
-	})
+	}).WithLogFile(logPath)
 	srv.Register(r)
 
 	// 前端构建产物托管：非 /api 路径一律回落到 index.html
@@ -220,6 +240,47 @@ func main() {
 	slog.Info("已退出")
 }
 
+// 静态资源与高频轮询走 Debug，避免访问日志淹没关键事件。
+var quietPaths = map[string]bool{
+	"/api/health":  true,
+	"/api/tasks":   true,
+	"/favicon.ico": true,
+	"/robots.txt":  true,
+}
+
+// requestLog 用结构化日志替代 gin 默认访问日志：按状态码与耗时分级，
+// 字段固定，便于按 path/status/latency_ms 检索慢请求与错误。
+func requestLog() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		latency := time.Since(start)
+		status := c.Writer.Status()
+		path := c.FullPath()
+		if path == "" {
+			path = c.Request.URL.Path
+		}
+		level := slog.LevelInfo
+		switch {
+		case status >= http.StatusInternalServerError:
+			level = slog.LevelError
+		case status >= http.StatusBadRequest:
+			level = slog.LevelWarn
+		case latency >= time.Second:
+			level = slog.LevelWarn
+		case quietPaths[path] || strings.HasPrefix(path, "/assets/"):
+			level = slog.LevelDebug
+		}
+		slog.Log(c.Request.Context(), level, "HTTP 请求",
+			"method", c.Request.Method,
+			"path", path,
+			"status", status,
+			"latency_ms", latency.Milliseconds(),
+			"bytes", c.Writer.Size(),
+			"ip", c.ClientIP())
+	}
+}
+
 // securityHeaders 补齐基础安全响应头，并禁止缓存接口响应。
 // HSTS 只在 TLS 直连时下发：反向代理场景由边缘终止 TLS，此处误发会让浏览器把 http:// 强跳成 https://。
 func securityHeaders() gin.HandlerFunc {
@@ -244,6 +305,12 @@ func securityHeaders() gin.HandlerFunc {
 }
 
 const maxJSONBody = 1 << 20
+
+// 滚动日志的磁盘占用上限：当前文件 + 3 份历史，合计约 20 MB。
+const (
+	maxLogBytes   = 5 << 20
+	maxLogBackups = 3
+)
 
 // bodyFreePaths 由 handler 自己按素材类型限流，套 1MB 通用上限会把「图片过大」
 // 变成读不出来的传输错误。

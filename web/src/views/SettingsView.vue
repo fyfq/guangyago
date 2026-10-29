@@ -11,6 +11,7 @@ import {
   Gauge,
   RotateCcw,
   Zap,
+  Download,
 } from 'lucide-vue-next'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
@@ -501,6 +502,25 @@ onMounted(load)
             光鸭尚未公布官方配额，保守限制并发；当前 {{ rate.gy_enable ? rate.gy_concurrency : '不限' }}
           </p>
         </div>
+      </div>
+    </Card>
+
+    <Card
+      class="lg:col-span-2"
+      title="运行日志"
+      desc="启动配置、刮削与推送结果都写在这里，排查问题时可直接下载"
+    >
+      <div class="flex flex-wrap items-center gap-3">
+        <a
+          href="/api/logs/download"
+          class="inline-flex items-center gap-2 rounded-lg border border-[var(--color-line)] px-4 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--color-surface-hover)]"
+        >
+          <Download class="h-4 w-4" />
+          下载当前日志
+        </a>
+        <p class="text-xs text-[var(--color-muted)]">
+          单文件上限 5 MB，轮转保留 3 份历史，文件位于数据目录的 logs/ 下
+        </p>
       </div>
     </Card>
   </div>

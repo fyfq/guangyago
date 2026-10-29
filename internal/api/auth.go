@@ -202,6 +202,7 @@ func (s *Server) login(c *gin.Context) {
 	// 账号不存在、被停用、密码错误统一返回同一个提示，不泄露账号状态
 	ok := auth.VerifyPasswordOrDummy(hash, req.Password)
 	if u == nil || !u.Enabled || !ok {
+		slog.Warn("登录失败", "username", username, "ip", c.ClientIP())
 		s.loginGuard.recordFail(s.store, ipKey, now)
 		s.loginGuard.recordFail(s.store, userKey, now)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
@@ -228,6 +229,7 @@ func (s *Server) login(c *gin.Context) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(auth.CookieName, token, int(auth.SessionTTL.Seconds()), "/", "", s.secureCookie(c), true)
 	u.LastLoginAt = &now
+	slog.Info("登录成功", "username", u.Username, "ip", c.ClientIP())
 	c.JSON(http.StatusOK, u)
 }
 

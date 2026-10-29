@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"log/slog"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -36,7 +37,7 @@ func New(cfg config.TelegramConfig, proxy *config.ProxyConfig, rate *config.Tele
 }
 
 // NewAtServerURL 与 New 相同，只把 Telegram API 根地址换成 serverURL
-//（空值走官方地址）。测试接缝：离线单测用它接一个假 Bot API，不走外网。
+// （空值走官方地址）。测试接缝：离线单测用它接一个假 Bot API，不走外网。
 func NewAtServerURL(cfg config.TelegramConfig, proxy *config.ProxyConfig, rate *config.TelegramRate, serverURL string) (*Notifier, error) {
 	if cfg.Token == "" {
 		return nil, nil
@@ -145,36 +146,60 @@ func (n *Notifier) Send(ctx context.Context, l *model.Link) (int64, error) {
 		return 0, fmt.Errorf("未配置频道 ID")
 	}
 	caption := Caption(l)
-	// 主发送（海报）先取一次令牌
-	if err := n.limiter.Wait(ctx); err != nil {
-		return 0, err
-	}
-	params := &bot.SendPhotoParams{
-		ChatID:              n.chatID,
-		Caption:             caption,
-		ParseMode:           models.ParseModeHTML,
-		DisableNotification: n.silent,
-	}
-	if l.PosterURL != "" {
-		params.Photo = &models.InputFileString{Data: l.PosterURL}
-	}
-	msg, err := n.bot.SendPhoto(ctx, params)
-	if err != nil && l.PosterURL != "" {
-		// 海报不可用时退化为纯文本；回退也是一次真实发送，同样要过限流
-		if werr := n.limiter.Wait(ctx); werr != nil {
-			return 0, werr
+	photo := photoInput(l.PosterURL)
+
+	var msg *models.Message
+	var err error
+	if photo == nil {
+		// 没有可用海报就不发 sendPhoto：空 photo 或非 http(s) 值会被 Telegram
+		// 当作 file_id 解析，报 "wrong remote file identifier"。
+		if err := n.limiter.Wait(ctx); err != nil {
+			return 0, err
 		}
-		msg, err = n.bot.SendMessage(ctx, &bot.SendMessageParams{
+		msg, err = n.bot.SendMessage(ctx, n.textParams(caption))
+	} else {
+		// 主发送（海报）先取一次令牌
+		if err := n.limiter.Wait(ctx); err != nil {
+			return 0, err
+		}
+		msg, err = n.bot.SendPhoto(ctx, &bot.SendPhotoParams{
 			ChatID:              n.chatID,
-			Text:                caption,
+			Photo:               photo,
+			Caption:             caption,
 			ParseMode:           models.ParseModeHTML,
 			DisableNotification: n.silent,
 		})
+		if err != nil {
+			// 海报不可用时退化为纯文本；回退也是一次真实发送，同样要过限流
+			slog.Warn("海报发送失败，回退纯文本", "poster_url", l.PosterURL, "err", err)
+			if werr := n.limiter.Wait(ctx); werr != nil {
+				return 0, werr
+			}
+			msg, err = n.bot.SendMessage(ctx, n.textParams(caption))
+		}
 	}
 	if err != nil {
 		return 0, err
 	}
 	return int64(msg.ID), nil
+}
+
+func (n *Notifier) textParams(caption string) *bot.SendMessageParams {
+	return &bot.SendMessageParams{
+		ChatID:              n.chatID,
+		Text:                caption,
+		ParseMode:           models.ParseModeHTML,
+		DisableNotification: n.silent,
+	}
+}
+
+// photoInput 只把 http(s) 地址交给 Telegram。历史数据里的本地路径、误存的 file_id
+// 等非 URL 值会被 Telegram 当成 file_id 反序列化，直接报 400。
+func photoInput(raw string) *models.InputFileString {
+	if !isHTTPURL(raw) {
+		return nil
+	}
+	return &models.InputFileString{Data: raw}
 }
 
 // captionLimit 是 Telegram sendPhoto 文案上限，留出余量。

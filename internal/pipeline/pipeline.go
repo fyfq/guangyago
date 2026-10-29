@@ -42,6 +42,8 @@ type Progress struct {
 	Error   string `json:"error"`
 	// updated 用于在多批次之间挑出最近活动的一个，不对外输出。
 	updated time.Time
+	// started 是该批次创建的时间，只用于日志里的整批耗时。
+	started time.Time
 }
 
 // Pipeline 以 goroutine 池串行处理刮削与推送任务。
@@ -168,7 +170,7 @@ func (p *Pipeline) Enqueue(kind string, ids []int64) int {
 	prog := p.progress[k]
 	if prog == nil || !prog.Running {
 		p.batch[k]++
-		prog = &Progress{Running: true, Kind: kind, Total: len(ids), Current: "排队中"}
+		prog = &Progress{Running: true, Kind: kind, Total: len(ids), Current: "排队中", started: time.Now()}
 		p.progress[k] = prog
 	} else {
 		prog.Total += len(ids)
@@ -203,7 +205,6 @@ func (p *Pipeline) feed(kind jobKind, batch int64, ids []int64) {
 // 已经在执行的那一条会跑完，但结果不再计入进度。
 func (p *Pipeline) Cancel(kind string) int {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	n := 0
 	for k, prog := range p.progress {
 		if kind != "" && string(k) != kind {
@@ -217,6 +218,10 @@ func (p *Pipeline) Cancel(kind string) int {
 		prog.updated = time.Now()
 		p.batch[k]++
 		n++
+	}
+	p.mu.Unlock()
+	if n > 0 {
+		slog.Info("已取消排队任务", "kind", kind, "batches", n)
 	}
 	return n
 }
@@ -280,6 +285,9 @@ func (p *Pipeline) tick(j job, ok bool, name string, err string) {
 	if prog.Done+prog.Failed >= prog.Total {
 		prog.Running = false
 		prog.Current = "完成"
+		slog.Info("批次结束", "kind", string(j.kind), "total", prog.Total,
+			"done", prog.Done, "failed", prog.Failed,
+			"elapsed_ms", time.Since(prog.started).Milliseconds())
 	}
 }
 
@@ -319,10 +327,13 @@ func (p *Pipeline) updateStatus(id int64, status model.Status, msg string) {
 
 func (p *Pipeline) scrape(ctx context.Context, j job, l *model.Link, sc *scraper.Client) {
 	if sc == nil {
+		slog.Warn("刮削跳过：未配置 TMDB API Key", "id", l.ID)
 		p.updateStatus(l.ID, model.StatusFailed, "未配置 TMDB API Key")
 		p.tick(j, false, l.Title, "未配置 TMDB API Key")
 		return
 	}
+	start := time.Now()
+	slog.Debug("开始刮削", "id", l.ID, "title", l.RawTitle, "tmdb_id", l.TMDBID)
 	p.updateStatus(l.ID, model.StatusScraping, "")
 
 	var res *scraper.Result
@@ -341,17 +352,24 @@ func (p *Pipeline) scrape(ctx context.Context, j job, l *model.Link, sc *scraper
 	if l.MediaType != "" && !scrapedBefore(l.Status) {
 		ref.Hint = string(l.MediaType)
 	}
+	// 已确认的 TMDB ID（人工核对后重刮，或此前已成功刮削）不再按标题相似度打回：
+	// 中英文标题天然对不上，反复转待核实会让手动补 ID 失去意义。
+	// 待核实记录里的 ID 来自自动搜索、尚未人工确认，仍需重新评估。
+	pinned := false
 	if l.TMDBID > 0 {
 		res, err = sc.Fetch(ctx, l.TMDBID, ref)
+		pinned = err == nil && res != nil && l.Status != model.StatusReview
 	}
 	if err != nil || res == nil {
 		res, err = sc.Search(ctx, ref.Title, ref.RawTitle, ref.Year)
+		pinned = false
 	}
 	if err != nil || res == nil {
 		msg := "未匹配到 TMDB 条目"
 		if err != nil {
 			msg = err.Error()
 		}
+		slog.Warn("刮削未匹配", "id", l.ID, "title", ref.Title, "err", msg)
 		p.updateStatus(l.ID, model.StatusUnmatched, msg)
 		p.tick(j, false, l.Title, msg)
 		return
@@ -377,14 +395,17 @@ func (p *Pipeline) scrape(ctx context.Context, j job, l *model.Link, sc *scraper
 		return
 	}
 	// 标题与年份都对不上，说明电影/剧集很可能判错了，转入待核查而非直接推送
-	if res.LowConfidence {
+	if res.LowConfidence && !pinned {
 		msg := fmt.Sprintf("TMDB %s/%d 命中「%s」(%d)，与原始标题「%s」差异较大，请确认类型",
 			res.MediaType, res.TMDBID, res.Title, res.Year, ref.Title)
+		slog.Warn("刮削结果待人工确认", "id", l.ID, "tmdb_id", res.TMDBID,
+			"title", res.Title, "score", res.MatchScore, "err", msg)
 		p.updateStatus(l.ID, model.StatusReview, msg)
 		p.tick(j, false, l.Title, msg)
 		return
 	}
-	slog.Debug("刮削完成", "id", l.ID, "title", res.Title, "type", res.MediaType, "score", res.MatchScore)
+	slog.Info("刮削完成", "id", l.ID, "tmdb_id", res.TMDBID, "media_type", res.MediaType,
+		"title", res.Title, "score", res.MatchScore, "elapsed_ms", time.Since(start).Milliseconds())
 	p.tick(j, true, res.Title, "")
 }
 
@@ -395,17 +416,23 @@ func scrapedBefore(s model.Status) bool {
 
 func (p *Pipeline) push(ctx context.Context, j job, l *model.Link, nt *notifier.Notifier) {
 	if nt == nil {
+		slog.Warn("推送跳过：未配置 Telegram Bot Token", "id", l.ID)
 		p.updateStatus(l.ID, model.StatusPushFailed, "未配置 Telegram Bot Token")
 		p.tick(j, false, l.Title, "未配置 Telegram Bot Token")
 		return
 	}
 	if l.Status != model.StatusScraped && l.TMDBID == 0 {
+		slog.Warn("推送跳过：尚未完成刮削", "id", l.ID, "title", l.RawTitle)
 		p.updateStatus(l.ID, model.StatusPushFailed, "尚未完成刮削")
 		p.tick(j, false, l.Title, "尚未完成刮削")
 		return
 	}
+	start := time.Now()
+	slog.Debug("开始推送", "id", l.ID, "title", l.Title, "has_poster", l.PosterURL != "")
 	msgID, err := nt.Send(ctx, l)
 	if err != nil {
+		slog.Warn("推送失败", "id", l.ID, "title", l.Title,
+			"poster_url", l.PosterURL, "elapsed_ms", time.Since(start).Milliseconds(), "err", err)
 		p.updateStatus(l.ID, model.StatusPushFailed, err.Error())
 		p.tick(j, false, l.Title, err.Error())
 		return
@@ -414,6 +441,8 @@ func (p *Pipeline) push(ctx context.Context, j job, l *model.Link, nt *notifier.
 	if err := p.store.UpdatePushed(l.ID, msgID); err != nil {
 		slog.Error("回写推送消息 ID 失败", "id", l.ID, "message_id", msgID, "err", err)
 	}
+	slog.Info("推送完成", "id", l.ID, "message_id", msgID, "title", l.Title,
+		"elapsed_ms", time.Since(start).Milliseconds())
 	p.tick(j, true, l.Title, "")
 	// 发送节奏交给 Notifier 的限流器统一控制，这里不再额外 sleep：
 	// 硬编码的等待会和限流叠加，也会绕过「海报失败回退」这类额外调用。

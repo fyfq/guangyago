@@ -6,6 +6,7 @@ export const DEFAULT_SITE_NAME = '光鸭 GO'
 
 export const branding = reactive<Branding>({
   site_name: DEFAULT_SITE_NAME,
+  site_subtitle: '资源库',
   logo_url: '',
   icon_url: '',
 })
@@ -21,6 +22,7 @@ function safeBrandingUrl(url: string): string {
 /** 应用一份品牌信息；设置页上传/清除后直接用它刷新全站状态 */
 export function applyBranding(next: Branding): void {
   branding.site_name = next.site_name.trim() || DEFAULT_SITE_NAME
+  branding.site_subtitle = next.site_subtitle
   branding.logo_url = safeBrandingUrl(next.logo_url)
   branding.icon_url = safeBrandingUrl(next.icon_url)
   applyIcon(branding.icon_url)

@@ -29,6 +29,8 @@ type Server struct {
 	configPath string
 	// reload 在配置变更后重建刮削与推送组件
 	reload func(*config.Config)
+	// logPath 是滚动日志文件的路径，为空表示只写标准输出（无法下载）
+	logPath string
 	// loginGuard 记录登录失败次数，防止暴力猜密码
 	loginGuard *loginGuard
 }
@@ -52,6 +54,12 @@ func (s *Server) RUnlockConfig() { s.configMu.RUnlock() }
 // WithRuntime 注入管道、配置与热更新回调。
 func (s *Server) WithRuntime(p *pipeline.Pipeline, cfg *config.Config, path string, reload func(*config.Config)) *Server {
 	s.pipe, s.cfg, s.configPath, s.reload = p, cfg, path, reload
+	return s
+}
+
+// WithLogFile 注入滚动日志文件路径，供管理员下载排查。
+func (s *Server) WithLogFile(path string) *Server {
+	s.logPath = path
 	return s
 }
 
@@ -118,6 +126,7 @@ func (s *Server) Register(r *gin.Engine) {
 			admin.GET("/settings", s.settings)
 			admin.POST("/settings", s.updateSettings)
 			admin.POST("/settings/test", s.testConfig)
+			admin.GET("/logs/download", s.downloadLog)
 
 			admin.POST("/branding", s.brandingUpload)
 			admin.DELETE("/branding", s.brandingClear)

@@ -61,11 +61,13 @@ export interface SEOState {
   google_verification: string
   base_url: string
   site_name: string
+  site_subtitle: string
 }
 
 /** 站点品牌：标题来自配置，logo 与图标是后台上传的同源素材地址 */
 export interface Branding {
   site_name: string
+  site_subtitle: string
   logo_url: string
   icon_url: string
 }
@@ -106,7 +108,7 @@ export interface SettingsInput {
     }
     guangya?: { enable?: boolean; concurrency?: number }
   }
-  seo?: { google_verification?: string; base_url?: string; site_name?: string }
+  seo?: { google_verification?: string; base_url?: string; site_name?: string; site_subtitle?: string }
 }
 
 export interface TestResult {

@@ -48,6 +48,7 @@ func Open(dsn string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	slog.Info("数据库已就绪", "dsn", dsn, "schema_version", schemaVersion)
 	return s, nil
 }
 

@@ -407,6 +407,7 @@ export const api = {
     })
     return request<PortalStats>(`/portal/stats?${qs.toString()}`)
   },
+  portalLink: (id: number) => request<PortalLink>(`/portal/link/${id}`),
 }
 
 export const statusMeta: Record<Status, { label: string; cls: string }> = {

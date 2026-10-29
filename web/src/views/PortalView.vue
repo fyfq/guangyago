@@ -20,6 +20,7 @@ import { toast } from '../lib/toast'
 import { safeExternalUrl } from '../lib/utils'
 
 const PAGE = 24
+const SITE_NAME = '光鸭 GO'
 const items = ref<PortalLink[]>([])
 const total = ref(0)
 const stats = ref<PortalStats | null>(null)
@@ -35,6 +36,85 @@ const detail = ref<PortalLink | null>(null)
 let loadSeq = 0
 let statsSeq = 0
 let timer: number | undefined
+let urlTimer: number | undefined
+
+const SORTS = ['new', 'rating'] as const
+
+// 页面状态全部映射到查询串，sitemap 里的 /?id=<n> 才有对应内容
+function applyURL() {
+  const p = new URLSearchParams(location.search)
+  keyword.value = p.get('q') ?? ''
+  const mt = p.get('media_type') ?? ''
+  media.value = mt === 'movie' || mt === 'tv' ? mt : ''
+  const y = Number(p.get('year'))
+  year.value = Number.isInteger(y) && y > 0 ? y : 0
+  const s = p.get('sort')
+  sort.value = (SORTS as readonly string[]).includes(s ?? '') ? (s as 'new' | 'rating') : 'new'
+  detail.value = null
+  const id = Number(p.get('id'))
+  if (Number.isInteger(id) && id > 0) openDeepLink(id)
+}
+
+// id 留在串上表示这是可分享的详情页；push=true 时新增一条历史，让返回键能关掉详情
+function syncURL(push = false) {
+  const p = new URLSearchParams()
+  if (keyword.value.trim()) p.set('q', keyword.value.trim())
+  if (media.value) p.set('media_type', media.value)
+  if (year.value) p.set('year', String(year.value))
+  if (sort.value !== 'new') p.set('sort', sort.value)
+  const id = detail.value?.id
+  if (id) p.set('id', String(id))
+  const qs = p.toString()
+  const href = qs ? `/?${qs}` : '/'
+  if (push) history.pushState(null, '', href)
+  else history.replaceState(null, '', href)
+  syncTitle()
+}
+
+// 详情页标题与服务端注入保持一致（《片名》（年份） · 站名），SPA 内切换时前端补上
+function syncTitle() {
+  const d = detail.value
+  if (!d) {
+    document.title = '光鸭 GO · 资源库'
+    return
+  }
+  const name = d.title || '未命名资源'
+  document.title = d.year ? `${name}（${d.year}） · ${SITE_NAME}` : `${name} · ${SITE_NAME}`
+}
+
+function scheduleURL() {
+  window.clearTimeout(urlTimer)
+  urlTimer = window.setTimeout(syncURL, 300)
+}
+
+async function openDeepLink(id: number) {
+  if (detail.value?.id === id) return
+  const found = items.value.find((l) => l.id === id)
+  if (found) {
+    detail.value = found
+    return
+  }
+  try {
+    detail.value = await api.portalLink(id)
+  } catch {
+    // 深链指向未收录或已下架的资源，退回列表页
+    syncURL()
+  }
+}
+
+function openDetail(l: PortalLink) {
+  detail.value = l
+  syncURL(true)
+}
+
+function closeDetail() {
+  detail.value = null
+  syncURL()
+}
+
+function onPopState() {
+  applyURL()
+}
 
 const filters = computed(() => [
   { value: '', label: '全部', count: stats.value?.total ?? total.value },
@@ -125,6 +205,7 @@ function resetFilters() {
   year.value = 0
   sort.value = 'new'
   schedule(0)
+  syncURL()
 }
 
 async function copyText(text: string) {
@@ -158,35 +239,54 @@ async function copyLink(l: PortalLink) {
 }
 
 function onKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') detail.value = null
+  if (e.key === 'Escape') closeDetail()
 }
 
-watch(keyword, () => schedule(300))
-watch(media, () => schedule(0))
-watch(year, () => schedule(0))
-watch(sort, () => schedule(0))
+watch(keyword, () => {
+  schedule(300)
+  scheduleURL()
+})
+watch([media, year, sort, detail], scheduleURL)
 
 watch(detail, (d) => {
   document.body.style.overflow = d ? 'hidden' : ''
-  // 动态注入结构化数据
-  const existingScript = document.getElementById('structured-data')
-  if (existingScript) existingScript.remove()
-  if (d) {
-    fetch(`/api/structured-data/${d.id}`)
-      .then(res => res.json())
-      .then(data => {
-        const script = document.createElement('script')
-        script.id = 'structured-data'
-        script.type = 'application/ld+json'
-        script.textContent = JSON.stringify(data)
-        document.head.appendChild(script)
-      })
-      .catch(() => {})
+  const existing = document.getElementById('structured-data')
+  // 深链进来的那条资源，服务端已经把 JSON-LD 写进原始 HTML，不必再取一次
+  if (d && existing?.dataset.itemId === String(d.id)) return
+  existing?.remove()
+  if (!d) {
+    // 关掉详情回到列表，把站点级标记补回来
+    injectSiteSchema()
+    return
   }
+  fetch(`/api/structured-data/${d.id}`)
+    .then(res => res.json())
+    .then(data => {
+      const script = document.createElement('script')
+      script.id = 'structured-data'
+      script.type = 'application/ld+json'
+      script.textContent = JSON.stringify(data)
+      document.head.appendChild(script)
+    })
+    .catch(() => {})
 })
 
+// 站点级 WebSite 标记用单独的 id，避免和单条标记互相顶掉
+function injectSiteSchema() {
+  if (document.getElementById('site-structured-data')) return
+  fetch('/api/structured-data')
+    .then(res => res.json())
+    .then(data => {
+      const script = document.createElement('script')
+      script.id = 'site-structured-data'
+      script.type = 'application/ld+json'
+      script.textContent = JSON.stringify(data)
+      document.head.appendChild(script)
+    })
+    .catch(() => {})
+}
+
 onMounted(async () => {
-  document.title = '光鸭 GO · 资源库'
   // 未安装时跳转到安装向导
   try {
     const status = await api.setupStatus()
@@ -197,22 +297,22 @@ onMounted(async () => {
   } catch {
     // 接口异常继续
   }
-  // 注入站点级别的结构化数据
-  fetch('/api/structured-data')
-    .then(res => res.json())
-    .then(data => {
-      const script = document.createElement('script')
-      script.type = 'application/ld+json'
-      script.textContent = JSON.stringify(data)
-      document.head.appendChild(script)
-    })
-    .catch(() => {})
+  const deepLinked = new URLSearchParams(location.search).has('id')
+  applyURL()
+  if (!deepLinked) {
+    // 深链页的标题与单条标记来自服务端注入，列表页才由前端补齐
+    document.title = '光鸭 GO · 资源库'
+    injectSiteSchema()
+  }
+  window.addEventListener('popstate', onPopState)
   window.addEventListener('keydown', onKey)
   load()
 })
 
 onUnmounted(() => {
   window.clearTimeout(timer)
+  window.clearTimeout(urlTimer)
+  window.removeEventListener('popstate', onPopState)
   window.removeEventListener('keydown', onKey)
   document.body.style.overflow = ''
   // 清理结构化数据
@@ -383,8 +483,8 @@ onUnmounted(() => {
             tabindex="0"
             role="button"
             :aria-label="`查看 ${l.title}`"
-            @click="detail = l"
-            @keydown.enter="detail = l"
+            @click="openDetail(l)"
+            @keydown.enter="openDetail(l)"
           >
             <div
               class="relative aspect-[2/3] overflow-hidden rounded-lg border border-[var(--color-line)] bg-[var(--color-surface-hover)]"
@@ -447,7 +547,7 @@ onUnmounted(() => {
     <div
       v-if="detail"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
-      @click.self="detail = null"
+      @click.self="closeDetail"
     >
       <div
         class="relative max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-[var(--radius-card)] bg-[var(--color-surface)] p-5 shadow-xl"
@@ -458,7 +558,7 @@ onUnmounted(() => {
         <button
           class="absolute right-3 top-3 rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-hover)]"
           aria-label="关闭"
-          @click="detail = null"
+          @click="closeDetail"
         >
           <X class="h-4 w-4" />
         </button>

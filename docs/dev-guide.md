@@ -2,22 +2,23 @@
 
 面向维护者。描述当前代码的真实结构，与 `docs/design.md`（需求与原型）、`docs/tech-selection.md`（选型）、`docs/design-system.md`（界面规范）互补。接口逐条说明见 [docs/api.md](api.md)。
 
-- 最后核对：2026-10-29，对应提交 `14cfbd0`
+- 最后核对：2026-10-30，对应提交 `344816d` 之后的站点品牌与运行日志改动
 - 技术栈：Go + gin + SQLite（纯 Go 驱动）/ Vue 3 + TS + Tailwind v4，前端产物 `go:embed` 进二进制
 
 ---
 
 ## 1. 运行时拓扑
 
-一个进程、一个端口（默认 `:8090`）同时提供三样东西：公开资源门户、后台管理界面、JSON API。SQLite 单文件库 + 海报目录 + `config.yaml` 全部落在 `data/` 下，因此备份 = tar 一个目录。
+一个进程、一个端口同时提供三样东西：公开资源门户、后台管理界面、JSON API。端口有三个来源，别记混：`config.Default()` 内置兜底 `:8080`、`config.example.yaml` 写 `:8090`、镜像 ENTRYPOINT 用 `-addr :8090` 固定——**文档与示例一律按 `:8090` 写**。SQLite 单文件库 + 海报目录 + 站点素材 + 运行日志 + `config.yaml` 全部落在 `data/` 下，因此备份 = tar 一个目录。
 
 ```
 浏览器 ──HTTP──> cmd/server
-                   ├─ internal/api      JSON API / robots / sitemap / 首页注入
+                   ├─ internal/api      JSON API / robots / sitemap / 首页注入 / 日志下载
                    ├─ internal/pipeline 刮削与推送 worker 池
                    ├─ internal/scraper  ──> TMDB API
                    ├─ internal/notifier ──> Telegram Bot API（推送 + long-polling 录入）
                    ├─ internal/store    ──> SQLite（WAL）
+                   ├─ internal/logging  ──> <data_dir>/logs/app.log（按大小轮转）
                    └─ internal/web      ──> go:embed 的前端 dist
 ```
 
@@ -28,36 +29,37 @@
 `cmd/server/main.go`：
 
 1. 解析 flag：`-config`（默认 `config.yaml`）、`-addr`、`-import FILE`、`-no-bot`、`-v`。
-2. `config.Load` → `store.Open`（迁移在建库后立即执行）。
+2. `config.Load` → `logging.New(<data_dir>/logs, maxLogBytes, maxLogBackups)`：把 slog 默认 handler 换成**标准输出 + `app.log` 双写**，拿到的路径随后经 `Server.WithLogFile` 注入下载接口。建目录或开文件失败只 `Warn`「日志文件不可用，仅输出到标准输出」并退化成单路输出（此时下载接口回 404），不影响启动。→ `store.Open`（迁移在建库后立即执行）。
 3. `auth.LoadOrCreateSessionKey(dataDir)`：读或生成 `data/session.key`（32 字节，0600）。拿不到则退回裸 SHA-256 摘要并告警——**换了这台文件，所有已登录会话都会失效**。
 4. `-import` 非空：解析 CSV/文本落库后打印统计并退出，不启服务。
 5. `ensureAdmin`：仅当用户表为空且设置了 `ADMIN_PASSWORD` 时创建初始管理员；否则只在日志提示走安装向导（`/setup`）。
 6. `build(cfg)`：按配置构造 scraper / notifier，首次创建 pipeline 并 `Start(workers)`，按需启动 Bot。这个闭包同时是配置热更新回调。
-7. gin：`ReleaseMode`、`SetTrustedProxies(nil)`（**故意不信任 `X-Forwarded-For`**，登录锁定按真实 TCP 地址统计）、中间件 `Logger / Recovery / securityHeaders / limitBody`，`Register` 里再加全局 `requireSameOrigin`。
+7. gin：`ReleaseMode`、`SetTrustedProxies(nil)`（**故意不信任 `X-Forwarded-For`**，登录锁定按真实 TCP 地址统计）、中间件 `requestLog / Recovery / securityHeaders / limitBody`，`Register` 里再加全局 `requireSameOrigin`。`requestLog` 取代了 `gin.Logger()`：按状态码与耗时分级（5xx→Error、4xx 或超过 1 秒→Warn），`/api/health`、`/api/tasks`、`/favicon.ico`、`/robots.txt` 与 `/assets/*` 降到 Debug，免得轮询和静态资源把关键事件淹掉。
 8. `NoRoute`：`/api/*` 回 404 JSON；命中静态文件直接 `FileFromFS`；其余一律 `srv.WriteIndex` 回落首页（为了注入 SEO 标签，见 §8）。
-9. 收 SIGINT/SIGTERM：`pipe.Stop()` → 5 秒超时的 `http.Server.Shutdown`。
+9. 收 SIGINT/SIGTERM：`pipe.Stop()` → 5 秒超时的 `http.Server.Shutdown`；`main` 退出时 `defer` 关闭日志文件。
 
 ## 3. 包职责
 
 | 包 | 职责 | 关键符号 |
 | --- | --- | --- |
-| `cmd/server` | 入口、装配、优雅关闭、安全响应头 | `main`、`ensureAdmin`、`runImport`、`securityHeaders`、`limitBody` |
-| `internal/api` | HTTP 层。`Server` 持有 store / pipeline / cfg | `New`、`WithRuntime`、`Register`、`Save`、`WriteIndex`、`loginGuard` |
+| `cmd/server` | 入口、装配、优雅关闭、安全响应头、访问日志分级 | `main`、`ensureAdmin`、`runImport`、`requestLog`、`securityHeaders`、`limitBody` |
+| `internal/api` | HTTP 层。`Server` 持有 store / pipeline / cfg | `New`、`WithRuntime`、`WithLogFile`、`Register`、`Save`、`WriteIndex`、`loginGuard`、`downloadLog` |
 | `internal/pipeline` | 刮削与推送的 worker 池与进度 | `Pipeline`、`Enqueue`、`Cancel`、`Status`/`StatusOf`、`UpdateComponents`、`SetGuangyaLimit` |
 | `internal/store` | SQLite 访问层，建表与迁移 | `Open`、`List`/`Get`/`Create`、`ListPublic`/`PublicStats`、`users.go`、`login.go` |
 | `internal/model` | 数据结构与状态常量 | `Link`、`Status*`、`User`、`PublicLink`/`PublicFilter`/`PublicStats`、状态集合 |
 | `internal/auth` | 密码哈希、会话令牌、会话密钥文件 | `HashPassword`、`VerifyPassword(OrDummy)`、`NewSessionToken`、`HashToken`、`LoadOrCreateSessionKey` |
 | `internal/config` | YAML 配置 + 环境变量覆盖 + 写回 | `Config`、`Default`、`Load`、`Save`、`Effective*`、`ChatID.Any` |
 | `internal/scraper` | TMDB 客户端与海报缓存 | `New`、`Fetch`、`LookupByID`/`LookupByTitle`、`SavePoster`、`TestConnection`、`LowConfidence` |
-| `internal/notifier` | Telegram 推送与 Bot 录入 | `New`、`Send`、`Caption`、`RunBot`、`TestTelegram` |
+| `internal/notifier` | Telegram 推送与 Bot 录入 | `New`、`Send`、`Caption`、`RunBot`、`TestTelegram`、`photoInput` |
 | `internal/parser` | 分享文本 / CSV 解析 | `ParseText`、`ParseCSV`、`SplitTitle`、`CleanTitle` |
 | `internal/netutil` | 代理 URL 与出网客户端、代理探测 | `ProxyURL`、`HTTPClient`、`TestProxy` |
 | `internal/ratelimit` | 令牌桶与信号量 | `Limiter`、`Semaphore` |
+| `internal/logging` | 按大小滚动的日志文件（stdlib 叶子包，只被 `cmd/server` 用） | `New`、`Writer.Write`/`Path`/`Close`、`rotate` |
 | `internal/web` | 前端产物嵌入 | `FS()`（无产物返回 nil）、`HTTPFS()` |
 
 ## 4. 数据模型
 
-`links` 24 列，`share_id` UNIQUE（去重键）。状态机：
+`links` 25 列，`share_id` UNIQUE（去重键）。状态机：
 
 ```
                     ┌──────────────┐
@@ -77,12 +79,16 @@
 - 界面按「状态集合」分组，定义在 `internal/model/link.go:66-73`：`PendingScrape`（刮削队列）、`ScrapedOnly`（资源库）、`PushQueue`（推送页）。新增状态时这三处和 `web/src/lib/api.ts` 的 `statusMeta` 必须同步。
 - 门户收录口径是「刮削成功即入库」：`internal/store/public.go` 的 `publicWhere` = `status IN ('scraped','pushed','push_failed')`，与 `ScrapedOnly` 同集合（SQL 里是字面量，改状态时两处一起改）。推送只是发布到频道，不再决定门户可见性；`ListPublic`/`PublicStats`/`GetPublic` 都走这个常量，`sitemap.xml` 与 `/?id` 注入因此自动跟着变。门户只暴露 `model.PublicLink` 的最小字段集（不含内部状态与错误）。
 - `users` / `sessions` / `login_attempts` / `schema_meta`：会话外键 `ON DELETE CASCADE`，删账号即清会话。
+- `release_date`（schema v2 新增）存 TMDB 的 `release_date` / `first_air_date`，只收 `YYYY-MM-DD` 完整日期（`scraper.normalizeReleaseDate` 把 `"2024"` 这类残串当未知），由 `UpdateScraped` 在刮削时写入，`Create` 阶段为空。门户 `?sort=release` 用它排序，缺日期时退到 `year || '-01-01'`，年份也没有的排最后——存量库不必重刮也能得到一个合理的顺序，想要精确顺序就重刮。
+- 加列走 `migrate()` 里的显式步骤（`ensureReleaseDateColumn` 先查 `pragma_table_info` 再 `ALTER`）：`CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列，而 SQLite 的 `ALTER TABLE ADD COLUMN` 不幂等。加列同时把 `schemaVersion` +1。
 
 ## 5. 流水线
 
 - 任务粒度是单条记录：`job{kind, linkID, batch}` 投进 `jobs`（缓冲 1024）。
 - 每个 kind 一份 `Progress`；`Enqueue` 时若不运行则自增批次号，`feed` goroutine 发现批次号变了就停止投喂——这是 `Cancel` 与重复点击的实现方式。在途任务靠 `stale()` 判定，结果会被丢弃（不计入进度）。
 - 单任务上下文超时 60 秒。
+- **已确认的 TMDB ID 不再被标题相似度打回**：`link.TMDBID > 0` 且 `Fetch` 成功、原状态不是 `review` 时算 pinned，跳过 `LowConfidence` → 待核实这条判定。中英文标题天然对不上，否则人工补 ID 或重刮会反复被转回待核实、补 ID 失去意义；`review` 里的 ID 来自自动搜索、尚未人工确认，仍会重新评估。
+- **海报只发 http(s) 地址**：`notifier.photoInput` 会把历史本地路径、误存的 file_id 这类非 URL 值判成「没有海报」——Telegram 会把它们当 `file_id` 反序列化并报 400（`wrong remote file identifier`）。没有可用海报时直接 `sendMessage` 纯文本，不再先跑一次注定失败的 `sendPhoto`；`sendPhoto` 真失败时仍保留一次纯文本回退，回退也是一次真实发送、同样要过限流。
 - **没有重试**：`config.Pipeline.MaxRetry` / `RetryDelay` 当前没有任何引用，失败即落到 `failed` / `push_failed`，由界面上的「重试」按钮人工重投。改这里前先确认是要自动重试还是继续手动。
 - 限流分布在服务层：TMDB 令牌桶在 `scraper.New` 内按 `rate_limit.tmdb` 构造；Telegram 发送间隔在 `notifier.New` 内按 `rate_limit.telegram` 构造；光鸭探测用 `pipeline` 里的信号量（`SetGuangyaLimit` 热更新）。
 - 配置保存后 `main.build` 会重建 scraper/notifier 并 `UpdateComponents` + 重启 Bot。
@@ -97,6 +103,7 @@
 - CSRF：全局 `requireSameOrigin` 拦截所有 POST/PUT/PATCH/DELETE 的跨站请求（无 Origin 且无 Referer 时放行，兼容 curl）。
 - 角色：`admin` 独占 `/api/settings*`、`/api/users*`；`operator` 连入口都看不到（`adminOnly` 标签按 `me.role` 过滤）。最后一个启用的管理员不允许降级或删除（`store.ErrLastAdmin`）。
 - 响应头：`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Permissions-Policy`、CSP（`script-src 'self'`、`connect-src 'self'`，所以前端不能引 CDN、不能写内联脚本）、仅 TLS 直连时下发 HSTS、`/api/*` 一律 `Cache-Control: no-store`。
+- 运行日志：访问日志只记 `method`/`path`（取 `c.FullPath()` 的路由模式，不是真实 URL，所以查询串里的提取码不会落盘）/`status`/`latency_ms`/`bytes`/`ip`。登录、下载日志这类敏感动作会带 `username`，因此日志文件本身按 0600 创建、目录 0750，只有管理员能通过 `GET /api/logs/download` 取走，且路径是启动时注入的固定值、不接受客户端参数。**新增日志字段时不要把密钥、Cookie 或提取码写进去**。
 - 请求体：普通接口 1MB，导入接口 32MB。
 - SQL：全部占位符；LIKE 关键词经 `likeEscape` 转义并配 `ESCAPE '\'`；门户排序走 `store/public.go` 的 `publicOrder` 白名单，后台列表 `store.List` 固定 `id DESC`。
 - CSV 导出：带 BOM，公式前缀加 `'` 防表格公式注入；门户链接经 `safeLinkURL` 只允许 http/https；TMDB 图片域名走白名单防 SSRF。
@@ -108,7 +115,7 @@
 | 段 | 关键项 |
 | --- | --- |
 | `server` | `addr`、`base_path`、`secure_cookie`（`*bool` 三态） |
-| `storage` | `dsn`、`data_dir`（会话密钥也在这）、`poster_dir` |
+| `storage` | `dsn`、`data_dir`（会话密钥、海报、站点素材、运行日志都在这底下）、`poster_dir` |
 | `tmdb` | `api_key`（32 位 Key 或 `eyJ` 开头的 Read Token 自适应）、`language`、`image_base`、`poster_size`、`min_score`、`cache_poster` |
 | `telegram` | `token`、`chat_id`（`ChatID` 同时接受数字与 `@频道名`）、`enable_bot`、`silent` |
 | `netdisk` | `guangya_hosts`、`user_agent`、`cookie`、`timeout` |
@@ -120,6 +127,8 @@
 环境变量：`TMDB_API_KEY`、`TG_BOT_TOKEN`、`TG_CHAT_ID`、`GUANGYA_COOKIE`、`PROXY_ADDR`、`PROXY_USERNAME`、`PROXY_PASSWORD`、`SEO_BASE_URL`；`ADMIN_USERNAME`/`ADMIN_PASSWORD` 只在用户表为空时被 `ensureAdmin` 使用。
 
 后台「设置」页写配置走 `config.Save`：**整份 YAML 重新序列化**（0600），手工加进去的注释和自定义排版会丢失——改默认值请改 `config.Default()`，别指望注释留在 `config.yaml` 里。保存后调用 `reload` 回调即时生效并重启 Bot。
+
+运行日志**不走配置**：路径固定 `<data_dir>/logs/app.log`，单文件上限与保留份数是 `cmd/server/main.go` 里的 `maxLogBytes`(5 MB) / `maxLogBackups`(3)，合计约 20 MB；`data_dir` 为空时回落到 `dsn` 所在目录。要调大小就改这两个常量，别加配置项——加了一个只有 0.1% 概率改的参数，等于给设置页和 `config.Save` 再加一处负担。
 
 `config.yaml` 与 `data/` 都在 `.gitignore` 里，含真实密钥，**不要提交**。
 
@@ -141,7 +150,7 @@
 - `navSeq` 每次跳转换号，作为 `:key` 强制重挂载列表页，用来重置筛选并重新拉数据——去掉它会让「再点一次回到默认筛选」失效。
 - 轮询：`ScrapeView` / `PushView` 用 1000ms `setInterval` 拉 `/api/tasks?kind=`，`running=false` 自动停；任务发起点必须重启轮询。
 - 会话：401 时 `location.replace('/login?next=...')`，回跳目标只允许 `/admin*`。Cookie 认证，前端不存令牌。
-- `web/src/lib/api.ts` 是唯一的取数入口，接口类型与后端 JSON tag 一一对应；改后端字段记得同步。
+- `web/src/lib/api.ts` 是唯一的取数入口，接口类型与后端 JSON tag 一一对应；改后端字段记得同步。例外只有一类：要拿**文件流**而不是 JSON 的动作（如设置页「下载当前日志」）用普通 `<a href="/api/logs/download">` 直接指向同源接口，浏览器自己处理下载。
 - 样式约定：只在 `style.css` 的 `@theme` 定义一次 token，组件里用 `text-[var(--color-*)]` 引用，不写裸色值；字体统一系统默认（`-apple-system / PingFang SC`）。
 - `web/src/lib/utils.ts` 的 `safeExternalUrl` 是所有外链/头像 URL 的协议白名单，别绕过它。
 - 站点品牌集中在 `web/src/lib/branding.ts`：一个 `reactive` 单例 + `loadBranding()`（`App.vue` 挂载时取一次，失败就用内置默认值，不拖垮页面）。素材地址只放行 `/branding/` 开头的同源路径，所以绑到 `:src` 前不必再过协议白名单。页面标题靠各视图自己的 `syncTitle()` + `watch(() => branding.site_name, …)` 跟随——品牌信息是异步到的，只在 `onMounted` 设一次会停在默认名。
@@ -149,15 +158,16 @@
 ## 10. 构建、调试、测试
 
 ```bash
-make web                      # npm run build → 拷进 internal/web/dist
+make web                      # npm run build → 拷进 internal/web/dist，并 touch dist/.gitkeep
 go build -o guangya-go ./cmd/server   # 必须再编一次，否则前端改动看不见
-./guangya-go -config config.yaml      # 监听 8090
+./guangya-go -config config.yaml      # 按示例配置监听 :8090
 ```
 
 - 日常联调：`cd web && npm run dev`（5173，代理 `/api` 到 127.0.0.1:8090），同时跑着后端二进制即可，不用反复 `make web`。
 - 只有 `make build` 会把产物写成 `bin/guangya`，裸二进制在 `./guangya-go`。
 - 类型检查没有进构建脚本（`npm run build` 不跑 `vue-tsc`），改动 TS 后手动 `cd web && npx vue-tsc --noEmit`。
-- 测试：`go test ./...` 全部离线，不出网。`internal/parser`、`internal/scraper`、`internal/notifier`、`internal/pipeline` 有测试；`internal/api`、`internal/store` 的改动仍要用真实的隔离实例验证。
+- 测试：`go test ./...` 全部离线，不出网。**接口与存储层已有真实覆盖**：`internal/api/harness_test.go` 起一套「真 `Server.Register` 路由 + 独立 SQLite 实例」的环境，直接打 HTTP 验证状态码契约与登录 / 设置 / 下载日志流程；`internal/store/crud_test.go` 覆盖增删改与事务不变式；`cmd/server`、`internal/logging`、`internal/ratelimit`、`internal/netutil` 也各有测试。加接口时顺着现有 harness 补（成功 / 失败 / 边界各一条），**不要 mock store**——上一版文档写过「api 与 store 要用真实隔离实例人工验证」，那条已经过期，环境本身已经自动化了。
+- 排查：日志同时写标准输出与 `<data_dir>/logs/app.log`，容器里 `docker logs` 与文件内容一致；设置页底部「运行日志」下载当前文件（仅管理员）。常用检索：`HTTP 请求`（`path`/`status`/`latency_ms`）、`批次结束`（`total`/`done`/`failed`/`elapsed_ms`）、`刮削结果待人工确认`、`推送失败`、`海报发送失败，回退纯文本`、`TMDB 限流，退让后重试`。5xx、4xx 与超过 1 秒的请求会自动升到 Warn/Error，`grep 'level=ERROR'` 就能捞出当天的异常。
 - 需要出网的组件靠**根地址注入**做测试接缝：`scraper.NewAtAPIBase(cfg, posterDir, proxy, rate, apiBase)`、`notifier.NewAtServerURL(cfg, proxy, rate, serverURL)`，生产入口 `scraper.New` / `notifier.New` 只是把根地址固定成官方地址的包装；设置页的连通性测试同理走包内的 `testConnectionAt` / `testTelegramAt`。pipeline 的成功路径（`scraped` / `pushed` 两条链路）就是用这两个接缝对着 `httptest` 假服务跑的，见 `internal/pipeline/seam_test.go`。新增接缝时保持 `New*` 与接缝默认值一致，别让玩家和测试走两套逻辑。
 - 冒烟：`make smoke`（`scripts/smoke.sh`）在 `mktemp -d` 里起一个 `127.0.0.1:18099` 的隔离实例，跑「安装 → 登录 → 门户/SEO → 登出」，不碰仓库的 `config.yaml` 和 `data/`，约 1 秒。改 `PORT=` / `BIN=` 用同名环境变量覆盖；CI 里跑之前必须先 `make web`，否则二进制里没有前端首页。
 - 打接口：`curl -c jar -X POST localhost:8090/api/auth/login -d '{"username":"...","password":"..."}'`，后续 `-b jar`。POST 带 Origin/Referer 时才做同源校验（跨站 403），命令行这类没有来源头的客户端直接放行，浏览器里的 CSRF 防线靠它加 `SameSite=Lax` 双层。
@@ -169,7 +179,7 @@ go build -o guangya-go ./cmd/server   # 必须再编一次，否则前端改动�
 
 - `Makefile`：`build` / `run` / `import FILE=` / `vet` / `tidy` / `clean` / `web` / `lint` / `smoke` / `cover` / `tools`。
 - `Dockerfile` 三阶段：`node:22-alpine` 出前端 → `golang:1.26-alpine` 交叉编译（`CGO_ENABLED=0`、`-trimpath -s -w`）→ `alpine:3.22` 运行（`ca-certificates`/`tzdata`、`USER 1000`、`EXPOSE 8090`、配置在 `/app/data/config.yaml`）。构建参数 `BUILD_PROXY`（只认 HTTP 端口）、`NPM_REGISTRY`、`GOPROXY`；首行刻意不写 `# syntax=`，避免 BuildKit 先去 Docker Hub 拉前端镜像。
-- `docker-compose.yml`：单服务 `app`，`pull_policy: always` + `image: ghcr.io/fyfq/guangyago:latest`，`8090:8090`，`./data:/app/data`，`host-gateway` 映射 `host.docker.internal`，`/api/health` 健康检查。站点素材写在 `<data_dir>/branding/`（进程属主可写，0750 目录 / 0600 文件），跟着 `./data` 卷一起备份，无需额外挂载。
+- `docker-compose.yml`：单服务 `app`，`pull_policy: always` + `image: ghcr.io/fyfq/guangyago:latest`，`8090:8090`，`./data:/app/data`，`host-gateway` 映射 `host.docker.internal`，`/api/health` 健康检查。站点素材写在 `<data_dir>/branding/`、运行日志写在 `<data_dir>/logs/`（都是进程属主可写，0750 目录 / 0600 文件），跟着 `./data` 卷一起备份，无需额外挂载。
 - `.github/workflows/ci.yml`：push main / PR / 手动触发 → `make tools` → `make lint` → `go test ./...` → `make web && make build` → `make smoke`（约 1 秒）；纯文档改动（`**.md`、`docs/**`、`LICENSE`、`.gitignore`）不跑，同分支并发自动取消旧任务。
 - `.github/workflows/docker-image.yml`：push main / `v*` tag / 手动触发 → QEMU+Buildx 多架构（amd64+arm64）推 GHCR。
 - 裸机：交叉编译出的单文件无任何依赖（纯 Go SQLite + 嵌入前端），配 `guangya.service`（`DynamicUser`，状态目录 `/var/lib/guangya/data/`）。
@@ -185,16 +195,19 @@ go build -o guangya-go ./cmd/server   # 必须再编一次，否则前端改动�
 | 新增配置项 | `config.Default()`、`config.example.yaml`、`api.settings` 响应、`settingsRequest`/`updateSettings`、`web/src/lib/api.ts` 的 `Settings`/`SettingsInput`、`SettingsView.vue` |
 | 新增接口 | `api.Register` 的分组（是否需要 `requireAdmin`）、`web/src/lib/api.ts` 方法、`docs/api.md` |
 | 新增前端页面 | `App.vue` 路由分支、`AdminShell` 的 `Tab`/`allTabs`/模板、`docs/api.md` 若涉及新接口 |
-| 改 schema | `store.migrateSQL` 幂等（`IF NOT EXISTS`）、`schemaVersion` 自增、存量库需数据迁移时要写显式迁移而不是只改建表串 |
+| 改 schema | `store.migrateSQL` 幂等（`IF NOT EXISTS`）、`schemaVersion` 自增、存量库需数据迁移时要写显式迁移而不是只改建表串（加列见 `ensureReleaseDateColumn`），`columns`/`scanLink` 与 `internal/store/store_test.go` 的版本断言同步 |
+| 改门户排序 | `store.public.go` 的 `publicOrder` 白名单、`web/src/views/PortalView.vue` 的 `SORTS` 与按钮、`docs/api.md` 的 `sort` 取值；`seo.go` 的 `sanitizeCanonicalQuery` 已放行 `sort`，加新参数时记得补 |
 | 改推送文案 | `notifier.Caption` 与 `GET /api/links/:id/caption` 同源，界面预览不用改 |
 | 改 SEO 注入 | `seo.go` 的 `headTags`/`WriteIndex`，注意 CSP 与 `base_url` |
 | 改站点品牌（标题/Logo/图标） | `branding.go` 的 `brandingSnapshot`/`headTags` 注入、`web/index.html` 的 `{{SITE_NAME}}` 占位符（注释里别写这个串，会一起被替换）、`web/src/lib/branding.ts`、门户/后台/登录三处头部、`scripts/smoke.sh` 的「站点品牌」段 |
 | 加同源静态文件路由 | 名称必须与配置里记录的值精确相等才回源（参考 `brandingFile`），别用 `http.ServeFile` 直接把目录挂出去；同时确认 `cmd/server/main.go` 的通用请求体上限是否要放行（`bodyFreePaths`） |
+| 加日志字段 / 调级别 | `cmd/server/main.go` 的 `requestLog` 与 `quietPaths`（轮询和静态资源必须留在 Debug，否则关键事件会被访问日志淹掉）、`maxLogBytes`/`maxLogBackups` 常量、`internal/logging` 的轮转行为、`Server.WithLogFile` 注入路径、设置页「运行日志」卡片与 `docs/api.md` 的下载接口 |
 
 已知的历史坑（别重复踩）：
 
 - 「设置」页曾把脱敏后的代理地址回填再保存，导致配置被掩码覆盖。现在 `addr`/`username` 一律明文返回（`has_password` 只表示有没有设密码）。**新增敏感字段时沿用这个策略，不要给可回写的字段加脱敏**。
 - 前端改动不生效通常是忘了 `make web` 之后还要 `go build`。
 - `web/index.html` 里放静态 `<link rel="canonical" href="/">` 会让 Vite 构建报 `EISDIR`；canonical 现在由服务端注入，别加回去。
-- 推送后一直显示「排队中」的问题尚未定位（怀疑 worker 未消费 / notifier 为 nil / 限流阻塞），排查从 `pipeline.worker`、`Progress.Current` 与 `pip.log` 的 `未配置 Telegram Bot Token` 告警入手。
+- 推送后一直显示「排队中」的问题尚未定位（怀疑 worker 未消费 / notifier 为 nil / 限流阻塞）。现在日志会落盘，直接从 `data/logs/app.log` 里捞 `推送跳过：未配置 Telegram Bot Token`、`批次结束`、`已取消排队任务`，再对照 `Progress.Current` 与 `pipeline.worker`。
+- 日志是标准输出与文件**双写**，单文件只有 5 MB、保留 3 份（约 20 MB 上限）。别把响应体、整段 CSV 或循环里的每条记录 `Info` 出来——一轮批量刮削就能把有效历史冲走，等于自断排查线索。批量场景记「批次结束」那种汇总级别，单条细节留在 Debug。
 - 本仓库可能同时被多个会话编辑；提交前 `git status` 确认工作区内容，`git diff` 检查有没有别人的改动被一起带进来。

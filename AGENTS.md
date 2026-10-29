@@ -21,10 +21,11 @@
 
 ```
 cmd/server ──▶ api ──▶ pipeline ──▶ { scraper, notifier, store, parser, ratelimit, netutil }
-                            │
-                            └──▶ config ──▶ (leaf)
+     │                │
+     │                └──▶ config ──▶ (leaf)
+     └──▶ logging ──▶ (leaf，只依赖 stdlib)
 
-model / auth / web / ratelimit / netutil / parser ─ 叶子包，禁止 import 项目内其它包（除 model）
+model / auth / web / ratelimit / netutil / parser / logging ─ 叶子包，禁止 import 项目内其它包（除 model）
 store ──▶ model（仅此一个内部依赖）
 scraper ──▶ { config, netutil, ratelimit }
 notifier ──▶ { config, model, netutil, ratelimit }
@@ -38,7 +39,7 @@ api ──▶ 所有其它内部包
 3. `internal/scraper`、`internal/notifier` **禁止** import `internal/store`。它们的输出交给 pipeline 决定要不要落库。
 4. `internal/pipeline` 是**唯一**能同时看到 store/scraper/notifier 的地方；跨阶段编排都写这里。
 5. `internal/api` 处理 HTTP 语义（鉴权、限流、请求/响应格式），**不要**在 handler 里塞业务循环。
-6. `cmd/server/main.go` 只做装配（依赖注入），不写逻辑。
+6. `cmd/server/main.go` 只做装配（依赖注入），不写逻辑。**唯一例外**：`requestLog` 访问日志分级中间件留在 main.go，因为它和 `logging.New`、slog handler 的组装是一件事——拆到 `api` 反而会让 api 反过来决定日志策略。再加日志相关的 HTTP 逻辑请放进 `internal/api`。
 
 ## 三、参考实现（照这些抄，别自造）
 
@@ -51,6 +52,9 @@ api ──▶ 所有其它内部包
 **API handler 错误契约** → [internal/api/auth.go](file:///Users/odin/Documents/Qoder/光鸭 GO/internal/api/auth.go)  
 要点：请求校验失败 → `400 + 中文 error`；鉴权失败 → `401`；权限不足 → `403`；资源不存在 → `404`；业务不变式违反（如 `ErrLastAdmin`）→ `400` + 具体中文；DB/内部错误 → `serverError(c, err)` 统一 500 + 日志。
 
+**按大小滚动的日志文件与分级访问日志** → [internal/logging/logging.go](file:///Users/odin/Documents/Qoder/光鸭 GO/internal/logging/logging.go) 里 `Writer` / `rotate`，配 [cmd/server/main.go](file:///Users/odin/Documents/Qoder/光鸭 GO/cmd/server/main.go) 里 `requestLog`  
+要点：slog 双写标准输出与 `data/logs/app.log`（目录 0750、文件 0600）；5xx→Error、4xx 或耗时超 1 秒→Warn、轮询与静态资源→Debug，`quietPaths` 是白名单而不是黑名单；单条日志超过上限也先滚动。新增字段一律小写下划线，**不要把密钥、Cookie 或提取码写进日志**。
+
 **服务端注入 HTML head** → [internal/api/seo.go](file:///Users/odin/Documents/Qoder/光鸭 GO/internal/api/seo.go) 里 `headTags` / `injectHeadTags`  
 要点：CSP 禁内联脚本，任何需要出现在首屏源码的 meta/link 都走服务端字符串注入；用户可控部分**必须**先经过白名单字符过滤（参考 `sanitizeCanonicalPath` / `sanitizeCanonicalQuery`）。
 
@@ -61,7 +65,7 @@ api ──▶ 所有其它内部包
 
 ### Go
 - 错误消息**中文**，短、动作化。"至少要保留一个启用的管理员"，而不是 "at least one enabled admin required"。
-- 日志用 `slog.Info/Warn/Error(msg, "key", value, ...)`，msg 中文，key/value 保持小写下划线。
+- 日志用 `slog.Info/Warn/Error(msg, "key", value, ...)`，msg 中文，key/value 保持小写下划线。级别按「会不会有人专门去捞它」选：正常完成的关键动作 `Info`（刮削完成、推送完成、批次结束），需要人看一眼但不致命 `Warn`（未匹配、待人工确认、回退、限流退让），只有排查现场要的细节 `Debug`（单条开始、请求状态、海报已缓存）。**批量循环里禁止逐条 `Info`**，5 MB 的滚动文件会被冲光。
 - **禁止** `_ = someErr`。要么处理，要么 `slog.Error("...", "err", err)` 记下来。参考 pipeline 里 `updateStatus`。
 - 上限常量命名 `max<X>`（如 `maxAPIResponseBytes`、`maxJSONBody`、`maxCSVBytes`），单位后缀（Bytes / MS / Count）。
 - LIKE 查询必须走 `store.likeEscape` + `ESCAPE '\'`。
@@ -84,6 +88,7 @@ api ──▶ 所有其它内部包
 - 登录限流：`login_attempts` 表 + 内存缓存双层，IP + 用户名分别计数。
 - SSRF：TMDB `imageBase` 只允许 `image.tmdb.org` / `themoviedb.org` / `api.themoviedb.org`。
 - HSTS：只在**直连 TLS** 时下发，反代场景交给边缘。
+- 运行日志：`<data_dir>/logs/app.log`（目录 0750 / 文件 0600，单文件 5 MB、保留 3 份）。访问日志取 `c.FullPath()` 的路由模式，查询串不落盘；下载只读启动时注入的固定路径，仅管理员可调，**不接受客户端指定的文件名**。
 
 ## 六、变更纪律（AI 特别容易踩）
 
@@ -113,7 +118,7 @@ api ──▶ 所有其它内部包
 | 类别 | 文件 |
 |---|---|
 | 密钥与运行配置 | `config.yaml`、`.env`、`.env.*`（`!` 例外：`.env.example`） |
-| 运行数据 | `data/`（含 `session.key`、数据库、海报）、`backups/`、`.workbuddy/` |
+| 运行数据 | `data/`（含 `session.key`、数据库、海报、`branding/` 站点素材、`logs/` 运行日志）、`backups/`、`.workbuddy/` |
 | 构建产物 | `bin/`、`web/dist/`、`internal/web/dist/*`（`!` 例外：`.gitkeep`）、`guangya-go`、`*.zip`、`*.tar.gz` |
 | 依赖目录 | `node_modules/`、`web/node_modules/` |
 | 杂项 | `.DS_Store`、`*.log`、`*.db`、`*.db-wal`、`*.db-shm` |
@@ -143,6 +148,8 @@ git diff --cached --stat    # 单次 diff 控制在 300 行内
 - [ ] `target="_blank"` 是不是带 `rel="noopener noreferrer"`？
 - [ ] 有没有 5 行以上复制粘贴？
 - [ ] 单元测试覆盖新逻辑的关键分支（成功/失败/边界各一条）？
+- [ ] 新增日志：msg 中文、key 小写下划线、级别选对（批量循环里不逐条 `Info`）、有没有把密钥 / Cookie / 提取码写进去？
+- [ ] 改了 `requestLog` / `quietPaths` 是不是同步了 `docs/dev-guide.md` §2 与 §10？
 
 ## 九、分支、版本与镜像
 

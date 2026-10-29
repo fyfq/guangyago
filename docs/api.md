@@ -1,6 +1,6 @@
 # 光鸭 GO 接口文档
 
-覆盖 `internal/api` 当前注册的全部路由。最后核对 2026-10-30（新增站点品牌接口）。改接口请同步更新本文（维护清单见 [docs/dev-guide.md](dev-guide.md#12-维护清单)）。
+覆盖 `internal/api` 当前注册的全部路由。最后核对 2026-10-30（新增站点品牌与运行日志下载接口）。改接口请同步更新本文（维护清单见 [docs/dev-guide.md](dev-guide.md#12-维护清单)）。
 
 ## 约定
 
@@ -91,7 +91,7 @@
 | `q` | — | 关键词，超 64 字符按字符截断 |
 | `media_type` | — | 仅 `movie` / `tv`，其他值 → `400 {"error":"参数不正确"}` |
 | `year` | 全部 | 非法值当作「全部年份」，不报错 |
-| `sort` | `new` | `new` \| `rating` \| `year`，其余回落 `new` |
+| `sort` | `new` | `new`（最新分享）\| `release`（上映时间）\| `rating` \| `year`，其余回落 `new`。`release` 按 TMDB 上映/首播日期倒序，存量记录只有年份时退到当年 1 月 1 日参与同一套顺序，两者都缺的排最后 |
 | `limit` | 24 | 1–60，越界回落 24 |
 | `offset` | 0 | 负数归 0，上限 10000 |
 
@@ -389,6 +389,14 @@ TMDB 预览，**只读不写库**，用于补 ID 时先核对。参数可放 JSO
 - `tmdb`：调 `/configuration`，区分「Key 无效（401）」与网络不通。
 - `telegram`：`getMe` → `getChat` → 校验 Bot 是否为频道管理员。
 - `proxy`：经代理访问 Telegram，附带出口 IP（拿不到 IP 不影响结论）。
+
+### `GET /api/logs/download`
+下载当前滚动日志文件（管理员）。**非 JSON**：成功直接回文件流 + `Content-Disposition: attachment`，文件名形如 `guangya-20261030-014500.log`，所以设置页用普通 `<a href>` 就能触发下载。
+
+- 日志只写标准输出、文件没建成（数据目录不可写）→ `404 {"error":"日志文件未启用"}`
+- 启动时建好了、下载时文件已被删除 → `404 {"error":"日志文件不存在"}`
+
+路径由进程启动时通过 `Server.WithLogFile` 注入，接口不接受任何客户端参数，因此没有路径穿越面；轮转出的 `app.log.1`…`app.log.3` 不在本接口范围内。GET 不触发同源校验。下载动作本身会记一条 `管理员下载日志`（带 `username` 与 `size`）。
 
 ### `POST /api/branding`
 `multipart/form-data` 上传站点素材：字段 `logo` / `icon` 至少带一个，`save_to_file=true` 时把文件名写回 `config.yaml`（省略则只活到本次进程）。

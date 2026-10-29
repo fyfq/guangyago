@@ -66,3 +66,41 @@ func TestScoreCandidateUsesOriginalTitle(t *testing.T) {
 		t.Errorf("原始语言标题应参与比对，得分 %v 过低", s)
 	}
 }
+
+func TestNormalizeReleaseDate(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"完整日期", "2024-06-01", "2024-06-01"},
+		{"首尾空白", " 2024-06-01 ", "2024-06-01"},
+		{"仅年份", "2024", ""},
+		{"年月", "2024-06", ""},
+		{"非闰年二月", "2023-02-29", ""},
+		{"空值", "", ""},
+	}
+	for _, c := range cases {
+		if got := normalizeReleaseDate(c.in); got != c.want {
+			t.Errorf("%s: normalizeReleaseDate(%q) = %q, 期望 %q", c.name, c.in, got, c.want)
+		}
+	}
+}
+
+// 门户按上映时间排序依赖这个字段，movie 取 release_date、tv 取 first_air_date。
+func TestToResultCarriesReleaseDate(t *testing.T) {
+	c := &Client{imageBase: "https://image.tmdb.org/t/p", posterSize: "w500"}
+
+	movie := (&detail{ID: 1, Title: "movie", ReleaseDate: "2023-11-08"}).toResult("movie", c)
+	if movie.ReleaseDate != "2023-11-08" || movie.Year != 2023 {
+		t.Errorf("电影应带上完整上映日期，实际 %+v", movie)
+	}
+
+	tv := (&detail{ID: 2, Name: "show", FirstAirDate: "2024"}).toResult("tv", c)
+	if tv.ReleaseDate != "" {
+		t.Errorf("残串日期应当未知处理，实际 %q", tv.ReleaseDate)
+	}
+	if tv.Year != 2024 {
+		t.Errorf("年份未知日期时仍应保留，实际 %d", tv.Year)
+	}
+}

@@ -162,6 +162,8 @@ expect_code 'sitemap 带缓存头' "$(curl -sS -m 10 -o /dev/null -w '%{http_cod
 expect_contains 'sitemap 响应有 Cache-Control' "$(cat "$WORK/sitemap.hdr")" 'Cache-Control: public, max-age=3600'
 expect_contains '结构化数据是 WebSite' "$(get /api/structured-data)" '"WebSite"'
 expect_code '不存在的资源深链 404' "$(get_code '/api/portal/link/999999')" "404"
+# 排序表达式里引用了 release_date，列不存在时 SQLite 在解析阶段就会报错，这条能兜住迁移没跑成功
+expect_contains '门户按上映时间排序' "$(get '/api/portal/links?sort=release&limit=5')" '"items":'
 
 echo '站点品牌'
 # 占位符必须由服务端替换，否则爬虫与首屏源码里会出现字面量 {{SITE_NAME}}

@@ -442,6 +442,15 @@ func TestSitemapXML_HomeAndItems(t *testing.T) {
 	if !strings.Contains(body, "<loc>https://gy.example.com/?id=") {
 		t.Errorf("缺少资源深链: %s", body)
 	}
+
+	// 首页地址只在 part=0 出现，否则 sitemapindex 会把同一个入口重复列几遍
+	if !strings.Contains(body, "<loc>https://gy.example.com/</loc>") {
+		t.Errorf("首片应包含首页地址: %s", body)
+	}
+	part1, _ := callHandler(t, s.sitemapXML, "/sitemap.xml?part=1")
+	if strings.Contains(part1, "<loc>https://gy.example.com/</loc>") {
+		t.Errorf("非首片不应重复首页地址: %s", part1)
+	}
 }
 
 func TestSitemapStore_PagingAndTotal(t *testing.T) {

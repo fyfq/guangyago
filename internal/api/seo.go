@@ -87,10 +87,12 @@ func (s *Server) sitemapXML(c *gin.Context) {
 		return
 	}
 
-	// 首页的 lastmod 取全站最近更新时间，爬虫据此判断列表页是否值得重新抓取
-	home := sitemapURL{Loc: baseURL + "/", LastMod: schemaDate(data.Latest), ChangeFreq: "daily", Priority: 1.0}
+	// 首页的 lastmod 取全站最近更新时间，爬虫据此判断列表页是否值得重新抓取；
+	// 只在首片输出，否则分片索引会把同一条首页 URL 重复列几遍。
 	urls := make([]sitemapURL, 0, len(data.Entries)+1)
-	urls = append(urls, home)
+	if part == 0 {
+		urls = append(urls, sitemapURL{Loc: baseURL + "/", LastMod: schemaDate(data.Latest), ChangeFreq: "daily", Priority: 1.0})
+	}
 	for _, e := range data.Entries {
 		urls = append(urls, sitemapURL{
 			Loc:        fmt.Sprintf("%s/?id=%d", baseURL, e.ID),

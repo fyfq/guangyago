@@ -3,10 +3,11 @@
 光鸭云盘分享链接管理工具：录入链接 → 取影视信息 → TMDB 刮削 → 推送 Telegram 频道。
 
 设计文档见 `docs/design.md`，技术选型见 `docs/tech-selection.md`，界面规范见 `docs/design-system.md`。
+**改代码前先看**：[docs/dev-guide.md](docs/dev-guide.md)（架构、包职责、状态机、安全、构建与维护清单）、[docs/api.md](docs/api.md)（逐个接口的参数与响应）。
 
 ## 当前进度：M1 ~ M3 已完成，M4 页面已完成
 
-已完成：项目骨架、SQLite 存储、光鸭链接解析（CSV 批量 + 分享文本）、TMDB 刮削、Telegram 频道推送与 Bot 录入、Web 后台（资源库 / 录入 / 刮削 / 推送 / 设置 / 用户管理）与公开资源门户、Docker 部署。
+已完成：项目骨架、SQLite 存储、光鸭链接解析（CSV 批量 + 分享文本）、TMDB 刮削、Telegram 频道推送与 Bot 录入、Web 后台（安装向导 / 资源库 / 录入 / 刮削 / 推送 / 设置 / 用户管理 / SEO）与公开资源门户、搜索引擎收录支持、Docker 部署。
 
 ## 快速开始
 
@@ -33,7 +34,7 @@ docker compose up -d --build
 curl -s localhost:8090/api/health
 ```
 
-`http://服务器IP:8090/` 是公开门户，`/admin` 是后台。首次启动自动创建管理员 `admin` / `admin123`，登录后立刻改密码。
+`http://服务器IP:8090/` 是公开门户，`/admin` 是后台。用户表为空时，首次访问会自动跳到安装向导 `/setup`，在页面里创建管理员账号（可选顺手填 TMDB Key）。想在无头环境初始化，就设 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 环境变量，服务启动时会直接建号。
 
 本机已有的 `data/`（如 `guangya.db` + `posters/`）直接整个拷过去就是无缝迁移，只有 `config.yaml` 的位置从项目根换成 `data/config.yaml`。
 
@@ -120,10 +121,11 @@ docker compose up -d
 | 路径 | 说明 |
 | --- | --- |
 | `/` | 公开资源门户，只展示已推送的记录：按片名搜索、按电影/剧集筛选、按最新或评分排序，点开可复制分享链接与提取码 |
-| `/admin` | 后台管理，录入 / 刮削 / 推送 / 资源库 / 设置 / 用户管理 |
+| `/admin` | 后台管理，录入 / 刮削 / 推送 / 资源库 / 设置 / 用户管理 / SEO |
 | `/login` | 后台登录；未登录访问 `/admin` 会自动跳转并带回跳地址 |
+| `/setup` | 安装向导；用户表为空时访问任意页面都会跳到这里 |
 
-首次启动会自动创建管理员 `admin` / `admin123`，并在日志里打印一次警告。可用 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 环境变量覆盖初始值；登录后请尽快在「用户管理」里重置密码。
+用户表为空时不会自动建号，请走 `/setup`；也可用 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 在无头环境直接初始化（仅在账号表为空时生效）。登录后请尽快在「用户管理」里确认密码强度。
 
 - 角色：**管理员**可管理用户；**运营**只能使用录入、刮削、推送与资源库。
 - 密码以 PBKDF2-HMAC-SHA256（随机盐）存储；会话是服务端可撤销的 HttpOnly Cookie（7 天），停用账号、重置或修改密码都会让旧会话立即失效。
@@ -153,6 +155,7 @@ docker compose up -d
 | **资源库** | `scraped` `pushed` `push_failed` | 刮削完成的资源都在这里：检索、海报墙、详情抽屉、单条重推、导出 CSV，按推送状态回看 |
 | **设置** | — | TMDB Key / Bot Token / 频道 ID / 代理，逐项连通性测试 |
 | **用户管理** | — | 仅管理员可见：创建账号、切换角色、停用/启用、重置密码、删除 |
+| **SEO** | — | 仅管理员可见：Google 站点验证码、站点根地址、sitemap / robots / 结构化数据自检与提交指引 |
 
 刮削成功后记录自动从「刮削队列」流出，推送完成后可在「资源库」按已推送回看；重刮失败会退回队列，不会留在资源库里充数。
 
@@ -177,44 +180,13 @@ TMDB: https://www.themoviedb.org/tv/20851
 
 ## 接口
 
-除 `/api/health`、`/api/auth/login`、`/api/portal/*` 外，其余接口都需要后台会话。
+逐条参数、请求体与响应字段见 **[docs/api.md](docs/api.md)**。要点：
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/api/health` | 健康检查 |
-| GET | `/api/portal/links?q=&media_type=&year=&sort=&limit=&offset=` | 公开门户列表，仅 `pushed`；`media_type` 取 `movie` / `tv`，`year` 为上映年份，`sort` 取 `new` / `rating` |
-| GET | `/api/portal/stats?q=&media_type=&year=` | 筛选项计数：分类数字忽略分类、年份选项忽略年份，另附不随筛选变化的 `library_total` |
-| POST | `/api/auth/login` | 登录 `{"username":"admin","password":"..."}`，成功后下发会话 Cookie |
-| GET | `/api/auth/me` | 当前登录账号 |
-| POST | `/api/auth/logout` | 退出并删除会话 |
-| POST | `/api/auth/password` | 修改自己的密码 `{"old_password":"...","new_password":"..."}` |
-| GET | `/api/users` | 账号列表（管理员） |
-| POST | `/api/users` | 创建账号 `{"username":"...","display_name":"...","password":"...","role":"operator"}`（管理员） |
-| PATCH | `/api/users/:id` | 改显示名 / 角色 / 启用状态（管理员） |
-| POST | `/api/users/:id/password` | 重置指定账号密码（管理员） |
-| DELETE | `/api/users/:id` | 删除账号并作废其会话（管理员） |
-| GET | `/api/links?status=&q=&limit=&offset=` | 链接列表；`status` 支持逗号分隔多值，也支持 `scraped_set` / `pending_set` 两个语义集合 |
-| GET | `/api/links/:id` | 单条详情 |
-| DELETE | `/api/links/:id` | 删除 |
-| POST | `/api/links/text` | 提交 `{"text": "分享文本"}` |
-| POST | `/api/links/import` | 上传 CSV（multipart `file`）或直接提交 CSV/文本 |
-| GET | `/api/links/export` | 导出 CSV（带 BOM），支持 `status` / `q` |
-| GET | `/api/stats` | 各状态数量 |
-| POST | `/api/links/batch-delete` | 批量删除 `{"ids":[1,2]}` |
-| POST | `/api/scrape` | 刮削 `{"ids":[]}` / `{"all":true}`（默认 pending）/ `{"statuses":["failed","unmatched"]}` 指定状态重试 |
-| POST | `/api/links/:id/scrape` | 单条重新刮削 |
-| POST | `/api/links/:id/tmdb` | 手动指定 TMDB ID：`{"tmdb_id":20851,"media_type":"tv","scrape":true}` |
-| POST | `/api/tmdb/lookup` | TMDB 条目预览（只读，不写库）：`{"query":"片名","year":2008}` 或 `{"tmdb_id":20851,"media_type":"tv"}` |
-| GET | `/api/links/:id/caption` | 卡片文案预览，返回 `{"html":...,"text":...}` |
-| POST | `/api/push` | 推送 `{"ids":[]}` / `{"scraped":true}` / `{"statuses":["push_failed"]}` 重推失败项 |
-| POST | `/api/links/:id/push` | 单条推送 |
-| GET | `/api/tasks?kind=scrape` | 任务进度；`kind` 可取 `scrape` / `push`，省略时返回最近活动的批次 |
-| POST | `/api/tasks/cancel` | 停止排队任务 `{"kind":"scrape"}`，`kind` 留空取消全部；在途单条会跑完但不计入进度 |
-| GET | `/api/settings` | 配置就绪状态（含代理，不返回密钥明文） |
-| POST | `/api/settings` | 更新密钥/代理，可写回配置文件 |
-| POST | `/api/settings/test` | 连通性测试：`{"target":"tmdb"\|"telegram"\|"proxy"}` |
+- 公开：`/api/health`、`/api/portal/links`、`/api/portal/stats`、`/api/setup/status`、`/api/setup`、`/api/auth/login`、`/robots.txt`、`/sitemap.xml`、`/api/structured-data[/:id]`。
+- 其余接口都要会话 Cookie（`gy_session`，HttpOnly + SameSite=Lax）；密钥、代理、SEO 与用户管理只对管理员开放。
+- 所有状态变更接口做同源校验（Origin/Referer），跨站 POST 会拿到 403。
+- 错误统一 `{"error":"中文提示"}`；导入返回 `{"total":94,"inserted":94,"skipped":0,"failed":[],"ids":[...]}`。
 
-导入返回：`{"total":94,"inserted":94,"skipped":0,"failed":[],"ids":[...]}`
 
 ## 解析规则
 
@@ -226,7 +198,12 @@ TMDB: https://www.themoviedb.org/tv/20851
 
 密钥建议走环境变量：`TMDB_API_KEY`、`TG_BOT_TOKEN`、`GUANGYA_COOKIE`，
 代理用 `PROXY_ADDR`（+ `PROXY_USERNAME` / `PROXY_PASSWORD`）。
-首次启动的初始管理员可用 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 指定，仅在账号表为空时生效。
+首次启动的初始管理员用安装向导 `/setup` 创建，或在无头环境用 `ADMIN_USERNAME` / `ADMIN_PASSWORD`（仅在账号表为空时生效）。
+站点根地址用 `SEO_BASE_URL`（反向代理后 sitemap 需要它才能写成公网域名）。
+
+### 收录与 SEO
+
+`/robots.txt`、`/sitemap.xml`、Schema.org 结构化数据都由服务端动态生成。要进 Google：后台「SEO」页填 Search Console「HTML 标签」给出的验证码，服务端会把它注入首页原始 HTML（爬虫读不到前端脚本补的标签），验证通过后在 Console 里提交 `https://<你的域名>/sitemap.xml`。详细步骤与配置项见 [docs/dev-guide.md](docs/dev-guide.md#8-seo-与-google-录入)。
 
 ### 代理
 

@@ -79,7 +79,14 @@ func (s *Server) stats(c *gin.Context) {
 		return
 	}
 	// 固定输出全部状态，计数为 0 的也返回，前端无需再补默认值
-	out := make(map[string]int, len(counts))
+	out := make(map[string]int, len(counts)+1)
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+	// total 按库内实际状态汇总（含未知状态），与 /api/links 的 {total,items} 契约对齐，
+	// 前端不必自己把各状态相加。
+	out["total"] = total
 	for _, st := range []model.Status{
 		model.StatusPending, model.StatusReview, model.StatusScraping,
 		model.StatusScraped, model.StatusUnmatched, model.StatusPushed,

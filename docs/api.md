@@ -114,7 +114,7 @@
 ```
 
 ### `GET /robots.txt`
-纯文本。放行 `/`，屏蔽 `/admin`、`/login`、`/setup`、`/api/`，并声明 Sitemap 地址。
+纯文本（`Cache-Control: public, max-age=3600`）。放行 `/`，屏蔽 `/admin`、`/login`、`/setup`、`/api/`，并声明 Sitemap 地址。
 
 ```
 User-agent: *
@@ -128,12 +128,14 @@ Sitemap: https://gy.example.com/sitemap.xml
 ```
 
 ### `GET /sitemap.xml`
-XML（`Content-Type: application/xml`）。收录首页与全部已收录记录（`/?id=<n>`，即刮削成功的记录，上限 5000 条）。域名取 `seo.base_url`，未配置则按请求头推断（`X-Forwarded-Proto=https` 或 TLS 为 https）。
+XML（`Content-Type: application/xml`，`Cache-Control: public, max-age=3600`）。收录首页与全部已收录记录（`/?id=<n>`，即刮削成功的记录）。单文件上限 5000 条：超出后 `GET /sitemap.xml` 改吐 `sitemapindex`，分片地址为 `/sitemap.xml?part=<n>`（part 从 0 起，首页条目只在 part 0 里）。域名取 `seo.base_url`，未配置则按请求头推断（`X-Forwarded-Proto=https` 或 TLS 为 https）。
+
+`lastmod` 取 `links.updated_at`（重新刮削、改状态都会刷新）；首页的 `lastmod` 取全站最近更新时间。
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://gy.example.com/</loc><changefreq>daily</changefreq><priority>1</priority></url>
+  <url><loc>https://gy.example.com/</loc><lastmod>2026-10-02</lastmod><changefreq>daily</changefreq><priority>1</priority></url>
   <url><loc>https://gy.example.com/?id=42</loc><lastmod>2026-10-01</lastmod><changefreq>monthly</changefreq><priority>0.8</priority></url>
 </urlset>
 ```
@@ -242,10 +244,11 @@ XML（`Content-Type: application/xml`）。收录首页与全部已收录记录�
 `{"ids":[1,2,3]}` → `{"deleted":3}`（成功删除的条数）。`ids` 为空 → `400 {"error":"ids 不能为空"}`。
 
 ### `GET /api/stats`
-后台总览。固定输出全部 8 个状态，计数为 0 的也在。
+后台总览。固定输出全部 8 个状态，计数为 0 的也在；另给 `total`（库内记录总数，含未列出的异常状态），前端不必自己把各状态相加。
 
 ```json
-{ "pending":4, "review":0, "scraping":0, "scraped":12,
+{ "total": 319,
+  "pending":4, "review":0, "scraping":0, "scraped":12,
   "unmatched":1, "pushed":300, "push_failed":2, "failed":0 }
 ```
 

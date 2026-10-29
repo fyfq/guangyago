@@ -11,6 +11,9 @@ import (
 // 集合与 model.ScrapedOnly 保持一致，新增状态时两处同步。
 const publicWhere = `status IN ('scraped', 'pushed', 'push_failed')`
 
+// defaultSitemapLimit 是调用方没给上限时单次返回的 sitemap 条目数。
+const defaultSitemapLimit = 5000
+
 const publicColumns = `id, title, original_title, year, media_type, tmdb_id, overview, genres,
 vote_average, runtime, poster_url, url, code, shared_at`
 
@@ -154,4 +157,42 @@ func (s *Store) GetPublic(id int64) (*model.PublicLink, error) {
 	}
 	p.URL = safeLinkURL(p.URL)
 	return &p, nil
+}
+
+// Sitemap 返回站点地图需要的数据：offset/limit 定位分片，同时给出收录总数与全站
+// 最近更新时间。updated_at 用 CAST 转成文本，避免驱动按时间类型解析时踩到格式差异。
+func (s *Store) Sitemap(offset, limit int) (*model.SitemapResult, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = defaultSitemapLimit
+	}
+	out := &model.SitemapResult{}
+
+	// clause 只由本文件常量拼出，limit/offset 走 ? 占位符
+	where := publicWhere // #nosec G202
+	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(CAST(updated_at AS TEXT)), '') FROM links WHERE `+where).
+		Scan(&out.Total, &out.Latest); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.Query(
+		`SELECT id, CAST(updated_at AS TEXT) FROM links WHERE `+where+
+			` ORDER BY `+publicOrder["new"]+` LIMIT ? OFFSET ?`, // #nosec G202
+		limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out.Entries = make([]model.SitemapEntry, 0, limit)
+	for rows.Next() {
+		var e model.SitemapEntry
+		if err := rows.Scan(&e.ID, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out.Entries = append(out.Entries, e)
+	}
+	return out, rows.Err()
 }

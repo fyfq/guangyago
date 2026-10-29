@@ -19,6 +19,13 @@ import (
 	"github.com/odin/guangya-go/internal/model"
 )
 
+// maxSitemapURLs 是单个 sitemap 文件的条目上限。超出后 /sitemap.xml 改吐 sitemapindex，
+// 按 ?part=<n> 分片，避免静默丢掉最老的记录。
+const maxSitemapURLs = 5000
+
+// sitemapNS 是 sitemaps.org 0.9 命名空间。
+const sitemapNS = "http://www.sitemaps.org/schemas/sitemap/0.9"
+
 // robotsTXT 返回搜索引擎爬虫指引
 func (s *Server) robotsTXT(c *gin.Context) {
 	baseURL := s.getBaseURL(c)
@@ -31,59 +38,86 @@ Disallow: /api/
 
 Sitemap: %s/sitemap.xml
 `, baseURL)
+	// robots.txt 与 sitemap 都不常变，给一分钟到一小时的缓存，减少爬虫重复回源。
+	c.Header("Cache-Control", "public, max-age=3600")
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(content))
 }
 
-// sitemapXML 动态生成站点地图，包含门户首页和所有已收录资源
+type sitemapURL struct {
+	Loc        string  `xml:"loc"`
+	LastMod    string  `xml:"lastmod,omitempty"`
+	ChangeFreq string  `xml:"changefreq,omitempty"`
+	Priority   float64 `xml:"priority,omitempty"`
+}
+
+type sitemapURLSet struct {
+	XMLName xml.Name     `xml:"urlset"`
+	Xmlns   string       `xml:"xmlns,attr"`
+	URLs    []sitemapURL `xml:"url"`
+}
+
+type sitemapIndexEntry struct {
+	Loc string `xml:"loc"`
+}
+
+type sitemapIndexDoc struct {
+	XMLName  xml.Name            `xml:"sitemapindex"`
+	Xmlns    string              `xml:"xmlns,attr"`
+	Sitemaps []sitemapIndexEntry `xml:"sitemap"`
+}
+
+// sitemapXML 动态生成站点地图：首页 + 已收录资源深链。
+// 收录总量超过单文件上限时，首页请求返回 sitemapindex，各分片仍由本 handler 按 part 提供。
 func (s *Server) sitemapXML(c *gin.Context) {
 	baseURL := s.getBaseURL(c)
+	part, _ := strconv.Atoi(c.Query("part"))
+	if part < 0 {
+		part = 0
+	}
 
-	// 获取所有已收录的资源
-	items, _, err := s.store.ListPublic(model.PublicFilter{
-		Sort:  "new",
-		Limit: 5000, // sitemap 最多收录 5000 条
-	})
+	data, err := s.store.Sitemap(part*maxSitemapURLs, maxSitemapURLs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成站点地图失败"})
 		return
 	}
+	c.Header("Cache-Control", "public, max-age=3600")
 
-	type URLItem struct {
-		Loc        string  `xml:"loc"`
-		LastMod    string  `xml:"lastmod,omitempty"`
-		ChangeFreq string  `xml:"changefreq,omitempty"`
-		Priority   float64 `xml:"priority,omitempty"`
+	if part == 0 && data.Total > maxSitemapURLs {
+		s.sitemapIndex(c, baseURL, data.Total)
+		return
 	}
 
-	urls := []URLItem{
-		{
-			Loc:        baseURL + "/",
-			ChangeFreq: "daily",
-			Priority:   1.0,
-		},
-	}
-
-	for _, item := range items {
-		urls = append(urls, URLItem{
-			Loc:        fmt.Sprintf("%s/?id=%d", baseURL, item.ID),
-			LastMod:    schemaDate(item.SharedAt),
+	// 首页的 lastmod 取全站最近更新时间，爬虫据此判断列表页是否值得重新抓取
+	home := sitemapURL{Loc: baseURL + "/", LastMod: schemaDate(data.Latest), ChangeFreq: "daily", Priority: 1.0}
+	urls := make([]sitemapURL, 0, len(data.Entries)+1)
+	urls = append(urls, home)
+	for _, e := range data.Entries {
+		urls = append(urls, sitemapURL{
+			Loc:        fmt.Sprintf("%s/?id=%d", baseURL, e.ID),
+			LastMod:    schemaDate(e.UpdatedAt),
 			ChangeFreq: "monthly",
 			Priority:   0.8,
 		})
 	}
+	slog.Debug("生成站点地图", "part", part, "urls", len(urls), "total", data.Total)
+	writeSitemapXML(c, sitemapURLSet{Xmlns: sitemapNS, URLs: urls})
+}
 
-	sitemap := struct {
-		XMLName xml.Name  `xml:"urlset"`
-		Xmlns   string    `xml:"xmlns,attr"`
-		URLs    []URLItem `xml:"url"`
-	}{
-		Xmlns: "http://www.sitemaps.org/schemas/sitemap/0.9",
-		URLs:  urls,
+// sitemapIndex 在条目超过单文件上限时输出分片索引，分片 URL 指回同一个 handler。
+func (s *Server) sitemapIndex(c *gin.Context, baseURL string, total int) {
+	entries := make([]sitemapIndexEntry, (total+maxSitemapURLs-1)/maxSitemapURLs)
+	for i := range entries {
+		entries[i].Loc = fmt.Sprintf("%s/sitemap.xml?part=%d", baseURL, i)
 	}
+	slog.Info("站点地图条目超过单文件上限，已分片", "total", total, "parts", len(entries))
+	writeSitemapXML(c, sitemapIndexDoc{Xmlns: sitemapNS, Sitemaps: entries})
+}
 
+// writeSitemapXML 输出 sitemap 文档，urlset 与 sitemapindex 共用同一段响应头与编码逻辑。
+func writeSitemapXML(c *gin.Context, v any) {
 	c.Header("Content-Type", "application/xml; charset=utf-8")
 	c.Writer.WriteString(xml.Header)
-	if err := xml.NewEncoder(c.Writer).Encode(sitemap); err != nil {
+	if err := xml.NewEncoder(c.Writer).Encode(v); err != nil {
 		slog.Error("编码 sitemap 失败", "err", err)
 	}
 }
@@ -224,37 +258,29 @@ const metaSummaryMaxRunes = 200
 // itemHeadTags 生成单条资源的原始 HTML 标签。
 // 值全部经过 html 转义，JSON-LD 由 json.Marshal 转义尖括号与 &，因此可以安全拼进 head。
 func itemHeadTags(item *model.PublicLink, siteName, baseURL string) string {
-	label := "影视资源"
-	if item.MediaType == model.MediaTV {
-		label = "剧集"
-	} else if item.MediaType == model.MediaMovie {
-		label = "电影"
-	}
-
-	title := strings.TrimSpace(item.Title)
-	if title == "" {
-		title = "未命名资源"
+	label := mediaLabel(item.MediaType)
+	headTitle := strings.TrimSpace(item.Title)
+	if headTitle == "" {
+		headTitle = "未命名资源"
 	}
 	if item.Year > 0 {
-		title = fmt.Sprintf("%s（%d）", title, item.Year)
+		headTitle = fmt.Sprintf("%s（%d）", headTitle, item.Year)
 	}
-
-	desc := truncateRunes(strings.TrimSpace(item.Overview), metaSummaryMaxRunes)
-	if desc == "" {
-		desc = fmt.Sprintf("%s《%s》的网盘分享链接", label, item.Title)
-	}
+	// 品牌词"光鸭云盘"必须出现在 title 里，否则片名+光鸭云盘的长尾查询匹配不上
+	seoTitle := headTitle + " - 光鸭云盘网盘分享 | " + siteName
+	desc := itemDescription(item, label)
 
 	pageURL := fmt.Sprintf("%s/?id=%d", baseURL, item.ID)
 	out := []string{
-		"<title>" + htmlEscape(title+" · "+siteName) + "</title>",
+		"<title>" + htmlEscape(seoTitle) + "</title>",
 		`<meta name="description" content="` + htmlEscape(desc) + `" />`,
 		`<meta property="og:type" content="video.movie" />`,
 		`<meta property="og:url" content="` + htmlEscape(pageURL) + `" />`,
-		`<meta property="og:title" content="` + htmlEscape(title) + `" />`,
+		`<meta property="og:title" content="` + htmlEscape(headTitle) + `" />`,
 		`<meta property="og:description" content="` + htmlEscape(desc) + `" />`,
 		`<meta property="og:site_name" content="` + htmlEscape(siteName) + `" />`,
 		`<meta name="twitter:card" content="summary_large_image" />`,
-		`<meta name="twitter:title" content="` + htmlEscape(title) + `" />`,
+		`<meta name="twitter:title" content="` + htmlEscape(headTitle) + `" />`,
 		`<meta name="twitter:description" content="` + htmlEscape(desc) + `" />`,
 	}
 	if item.PosterURL != "" {
@@ -263,13 +289,87 @@ func itemHeadTags(item *model.PublicLink, siteName, baseURL string) string {
 			`<meta name="twitter:image" content="`+htmlEscape(item.PosterURL)+`" />`,
 		)
 	}
-	if jsonld, err := json.Marshal(buildMovieSchema(item, baseURL)); err == nil {
+	if jsonld, err := json.Marshal(buildItemGraph(item, baseURL)); err == nil {
 		// id 与前端注入的单条标记一致，data-item-id 让 SPA 认出「这条已经有了」，不必再取一次
 		out = append(out, `<script id="structured-data" data-item-id="`+strconv.FormatInt(item.ID, 10)+`" type="application/ld+json">`+string(jsonld)+`</script>`)
 	} else {
 		slog.Warn("生成结构化数据失败", "id", item.ID, "err", err)
 	}
 	return strings.Join(out, "\n    ")
+}
+
+// mediaLabel 返回影视类型的中文名，空类型回退到通用文案。
+func mediaLabel(mt model.MediaType) string {
+	switch mt {
+	case model.MediaTV:
+		return "剧集"
+	case model.MediaMovie:
+		return "电影"
+	}
+	return "影视资源"
+}
+
+// itemDescription 组装描述文本：简介在前保证每页唯一（对抗 Google scraped-content 判定），
+// 片名 + 类型 + 年份 + 时长 + 评分中段承载关键词信号，结尾固定"光鸭云盘网盘分享"打进目标查询空间。
+// 不放提取码，避免 SERP 直接给出访问方式绕过点击进站。
+func itemDescription(item *model.PublicLink, label string) string {
+	var b strings.Builder
+	if ov := strings.TrimSpace(item.Overview); ov != "" {
+		b.WriteString(truncateRunes(ov, metaSummaryMaxRunes))
+		if !strings.HasSuffix(ov, "。") {
+			b.WriteString("。")
+		}
+	}
+	b.WriteString("《")
+	b.WriteString(strings.TrimSpace(item.Title))
+	b.WriteString("》")
+	b.WriteString(label)
+	if item.Year > 0 {
+		fmt.Fprintf(&b, "，%d 年", item.Year)
+	}
+	if item.Runtime > 0 {
+		fmt.Fprintf(&b, "，时长 %d 分钟", item.Runtime)
+	}
+	if item.VoteAverage > 0 {
+		fmt.Fprintf(&b, "，评分 %.1f/10", item.VoteAverage)
+	}
+	b.WriteString("。光鸭云盘网盘分享，点击获取提取码与在线观看地址。")
+	return b.String()
+}
+
+// buildItemGraph 输出 @graph：资源主体 + 面包屑。
+// Google 会依据 BreadcrumbList 在 SERP 显示面包屑富结果；
+// 不做 VideoObject，因为其 contentUrl 要求可下载视频直链，网盘分享页会触发 rich result 违规。
+func buildItemGraph(item *model.PublicLink, baseURL string) map[string]any {
+	pageURL := fmt.Sprintf("%s/?id=%d", baseURL, item.ID)
+	crumbs := []any{
+		map[string]any{"@type": "ListItem", "position": 1, "name": "首页", "item": baseURL + "/"},
+	}
+	if item.MediaType != "" {
+		crumbs = append(crumbs, map[string]any{
+			"@type":    "ListItem",
+			"position": len(crumbs) + 1,
+			"name":     mediaLabel(item.MediaType),
+			"item":     fmt.Sprintf("%s/?media_type=%s", baseURL, item.MediaType),
+		})
+	}
+	title := strings.TrimSpace(item.Title)
+	if title == "" {
+		title = "未命名资源"
+	}
+	crumbs = append(crumbs, map[string]any{
+		"@type":    "ListItem",
+		"position": len(crumbs) + 1,
+		"name":     title,
+		"item":     pageURL,
+	})
+	return map[string]any{
+		"@context": "https://schema.org",
+		"@graph": []any{
+			buildMovieSchema(item, baseURL),
+			map[string]any{"@type": "BreadcrumbList", "itemListElement": crumbs},
+		},
+	}
 }
 
 // schemaDate 把库里的 "2006-01-02 15:04:05" 归一成 ISO 8601 日期；

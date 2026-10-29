@@ -125,7 +125,9 @@
 
 ## 8. SEO 与 Google 录入
 
-- `robots.txt` / `sitemap.xml` / `GET /api/structured-data[/:id]` 由服务端动态生成（`internal/api/seo.go`）。sitemap 收录 `/?id=<n>`，上限 5000 条。三者的可见范围都走 `store.publicWhere`（刮削成功即收录），不另判推送状态。
+- `robots.txt` / `sitemap.xml` / `GET /api/structured-data[/:id]` 由服务端动态生成（`internal/api/seo.go`）。三者的可见范围都走 `store.publicWhere`（刮削成功即收录），不另判推送状态。
+- sitemap 数据来自 `store.Sitemap(offset, limit)`（只取 `id` + `updated_at`，比 `ListPublic` 轻）。单文件上限 `maxSitemapURLs = 5000`：超出后 `/sitemap.xml` 返回 `sitemapindex`，分片回到同一 handler 的 `?part=<n>`，**不会再静默丢掉最老的记录**。`lastmod` 用 `updated_at`（重刮/改状态都会刷新），首页条目的 `lastmod` 用全站 `MAX(updated_at)`。`robots.txt` 与 `sitemap.xml` 都带 `Cache-Control: public, max-age=3600`。
+- `updated_at` 是 DATETIME 列，SQL 里一律 `CAST(... AS TEXT)` 再扫进 `string`，避免驱动按时间类型解析时踩格式差异。
 - 域名解析顺序：`seo.base_url` 优先，否则按请求 TLS 与 `Host` 推断。**放在反向代理或多域名环境里必须固定 `base_url`**，否则 sitemap 会写成内网地址。
 - `WriteIndex` 在返回首页 HTML 时把 `<meta name="google-site-verification">` 和 `<link rel="canonical">` 注入 `<head>`；请求带 `?id=<n>` 且记录已收录（刮削成功）时，再注入该资源自己的 `title` / `description` / `og:` / `twitter:` / JSON-LD，并删掉模板里的站点级同类标签，避免同名标签重复。必须走服务端注入：CSP 拦内联脚本，爬虫也读不到前端 JS 补的标签。`/admin*`、`/login`、`/setup` 不生成 canonical。
 - 门户把页面状态绑到查询串（`?id`/`?q`/`?media_type`/`?year`/`?sort`），`PortalView` 挂载时 `applyURL()` 回填、`popstate` 时重新回填：打开详情用 `pushState`（返回键先关详情），改筛选只 `replaceState`（不塞历史）。所以 sitemap 里的 `/?id=<n>` 是能被爬虫打开的真实页面，而不是一串回落到空壳首页的 URL。

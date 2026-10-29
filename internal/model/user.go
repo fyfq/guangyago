@@ -63,3 +63,17 @@ type PublicStats struct {
 	LibraryTotal int              `json:"library_total"`
 	Years        []PublicYearStat `json:"years"`
 }
+
+// SitemapEntry 是站点地图里的一行：资源 ID 与最近更新时间（SQLite 的原始日期文本）。
+type SitemapEntry struct {
+	ID        int64
+	UpdatedAt string
+}
+
+// SitemapResult 是站点地图的数据源：本页条目、收录总数、全站最近更新时间。
+// Total 超过单文件上限时由 API 层切成 sitemapindex，Latest 用作首页条目的 lastmod。
+type SitemapResult struct {
+	Entries []SitemapEntry
+	Total   int
+	Latest  string
+}

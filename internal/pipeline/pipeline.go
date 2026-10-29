@@ -50,7 +50,10 @@ type Pipeline struct {
 	scraper  *scraper.Client
 	notifier *notifier.Notifier
 	jobs     chan job
-	mu       sync.Mutex
+	// ctx 生命周期覆盖整个 pipeline，Stop 后所有 worker 与 feed goroutine 都会退出。
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
 	// progress 与 batch 按任务类型（刮削 / 推送）各自独立，
 	// 两种任务可以同时进行，互不覆盖进度。
 	progress map[jobKind]*Progress
@@ -58,18 +61,29 @@ type Pipeline struct {
 	// guangya 是光鸭分享检测的并发上限。光鸭没有公布官方配额，
 	// 默认只允许 2 个并发，接入分享检测后由 GuangyaGuard 统一把关。
 	guangya *ratelimit.Semaphore
+	// started 记录已经启动的 worker 数，避免热更新时重复起 goroutine。
+	started bool
 }
 
 func New(st *store.Store, sc *scraper.Client, nt *notifier.Notifier) *Pipeline {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Pipeline{
 		store:    st,
 		scraper:  sc,
 		notifier: nt,
 		jobs:     make(chan job, 1024),
+		ctx:      ctx,
+		cancel:   cancel,
 		progress: map[jobKind]*Progress{},
 		batch:    map[jobKind]int64{},
 		guangya:  ratelimit.NewSemaphore(config.DefaultGuangyaConcurrency),
 	}
+}
+
+// Stop 关停 pipeline：取消所有 feed goroutine、停止 worker 消费、清空队列。
+// 幂等，重复调用安全。
+func (p *Pipeline) Stop() {
+	p.cancel()
 }
 
 // SetGuangyaLimit 更新光鸭分享检测的并发上限，界面改配置后即时生效。
@@ -105,25 +119,49 @@ func (p *Pipeline) Scraper() *scraper.Client {
 	return sc
 }
 
-// Start 启动 worker。
+// Start 启动 worker。同一实例重复调用只生效一次；Stop 后不可重启。
 func (p *Pipeline) Start(workers int) {
 	if workers <= 0 {
 		workers = 1
 	}
+	p.mu.Lock()
+	if p.started {
+		p.mu.Unlock()
+		return
+	}
+	p.started = true
+	p.mu.Unlock()
 	for i := 0; i < workers; i++ {
-		go func() {
-			for j := range p.jobs {
-				p.handle(j)
+		go p.worker()
+	}
+}
+
+// worker 消费任务，收到关停信号后退出。
+func (p *Pipeline) worker() {
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case j, ok := <-p.jobs:
+			if !ok {
+				return
 			}
-		}()
+			p.handle(j)
+		}
 	}
 }
 
 // Enqueue 提交一批任务，返回排队数量。
 // 同类任务正在运行时追加到当前批次，不会重置进度。
+// pipeline 已关停时返回 0，不再投递任务。
 func (p *Pipeline) Enqueue(kind string, ids []int64) int {
 	if len(ids) == 0 {
 		return 0
+	}
+	select {
+	case <-p.ctx.Done():
+		return 0
+	default:
 	}
 	k := jobKind(kind)
 	p.mu.Lock()
@@ -144,6 +182,7 @@ func (p *Pipeline) Enqueue(kind string, ids []int64) int {
 }
 
 // feed 把本批次的 ID 依次写入队列，批次失效（取消或替换）时提前退出。
+// 队列满或 pipeline 关停时也能中断，不会永久阻塞。
 func (p *Pipeline) feed(kind jobKind, batch int64, ids []int64) {
 	for _, id := range ids {
 		p.mu.Lock()
@@ -152,7 +191,11 @@ func (p *Pipeline) feed(kind jobKind, batch int64, ids []int64) {
 		if stale {
 			return
 		}
-		p.jobs <- job{kind: kind, linkID: id, batch: batch}
+		select {
+		case <-p.ctx.Done():
+			return
+		case p.jobs <- job{kind: kind, linkID: id, batch: batch}:
+		}
 	}
 }
 
@@ -250,7 +293,7 @@ func (p *Pipeline) handle(j job) {
 	if p.stale(j) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(p.ctx, 60*time.Second)
 	defer cancel()
 
 	l, err := p.store.Get(j.linkID)
@@ -267,13 +310,20 @@ func (p *Pipeline) handle(j job) {
 	}
 }
 
+// updateStatus 更新状态并在失败时写日志，避免调用点静默丢弃错误。
+func (p *Pipeline) updateStatus(id int64, status model.Status, msg string) {
+	if err := p.store.UpdateStatus(id, status, msg); err != nil {
+		slog.Error("更新任务状态失败", "id", id, "status", string(status), "err", err)
+	}
+}
+
 func (p *Pipeline) scrape(ctx context.Context, j job, l *model.Link, sc *scraper.Client) {
 	if sc == nil {
-		p.store.UpdateStatus(l.ID, model.StatusFailed, "未配置 TMDB API Key")
+		p.updateStatus(l.ID, model.StatusFailed, "未配置 TMDB API Key")
 		p.tick(j, false, l.Title, "未配置 TMDB API Key")
 		return
 	}
-	_ = p.store.UpdateStatus(l.ID, model.StatusScraping, "")
+	p.updateStatus(l.ID, model.StatusScraping, "")
 
 	var res *scraper.Result
 	var err error
@@ -302,7 +352,7 @@ func (p *Pipeline) scrape(ctx context.Context, j job, l *model.Link, sc *scraper
 		if err != nil {
 			msg = err.Error()
 		}
-		_ = p.store.UpdateStatus(l.ID, model.StatusUnmatched, msg)
+		p.updateStatus(l.ID, model.StatusUnmatched, msg)
 		p.tick(j, false, l.Title, msg)
 		return
 	}
@@ -320,7 +370,8 @@ func (p *Pipeline) scrape(ctx context.Context, j job, l *model.Link, sc *scraper
 	l.PosterURL = res.PosterURL
 	l.PosterPath = poster
 	if err := p.store.UpdateScraped(l.ID, l); err != nil {
-		_ = p.store.UpdateStatus(l.ID, model.StatusFailed, err.Error())
+		slog.Error("写入刮削结果失败", "id", l.ID, "err", err)
+		p.updateStatus(l.ID, model.StatusFailed, err.Error())
 		p.tick(j, false, l.Title, err.Error())
 		return
 	}
@@ -328,7 +379,7 @@ func (p *Pipeline) scrape(ctx context.Context, j job, l *model.Link, sc *scraper
 	if res.LowConfidence {
 		msg := fmt.Sprintf("TMDB %s/%d 命中「%s」(%d)，与原始标题「%s」差异较大，请确认类型",
 			res.MediaType, res.TMDBID, res.Title, res.Year, ref.Title)
-		_ = p.store.UpdateStatus(l.ID, model.StatusReview, msg)
+		p.updateStatus(l.ID, model.StatusReview, msg)
 		p.tick(j, false, l.Title, msg)
 		return
 	}
@@ -343,22 +394,25 @@ func scrapedBefore(s model.Status) bool {
 
 func (p *Pipeline) push(ctx context.Context, j job, l *model.Link, nt *notifier.Notifier) {
 	if nt == nil {
-		_ = p.store.UpdateStatus(l.ID, model.StatusPushFailed, "未配置 Telegram Bot Token")
+		p.updateStatus(l.ID, model.StatusPushFailed, "未配置 Telegram Bot Token")
 		p.tick(j, false, l.Title, "未配置 Telegram Bot Token")
 		return
 	}
 	if l.Status != model.StatusScraped && l.TMDBID == 0 {
-		_ = p.store.UpdateStatus(l.ID, model.StatusPushFailed, "尚未完成刮削")
+		p.updateStatus(l.ID, model.StatusPushFailed, "尚未完成刮削")
 		p.tick(j, false, l.Title, "尚未完成刮削")
 		return
 	}
 	msgID, err := nt.Send(ctx, l)
 	if err != nil {
-		_ = p.store.UpdateStatus(l.ID, model.StatusPushFailed, err.Error())
+		p.updateStatus(l.ID, model.StatusPushFailed, err.Error())
 		p.tick(j, false, l.Title, err.Error())
 		return
 	}
-	_ = p.store.UpdatePushed(l.ID, msgID)
+	// 推送已成功、消息 ID 写回失败时会导致后续无法撤回或跟踪该条消息，必须记录
+	if err := p.store.UpdatePushed(l.ID, msgID); err != nil {
+		slog.Error("回写推送消息 ID 失败", "id", l.ID, "message_id", msgID, "err", err)
+	}
 	p.tick(j, true, l.Title, "")
 	// 发送节奏交给 Notifier 的限流器统一控制，这里不再额外 sleep：
 	// 硬编码的等待会和限流叠加，也会绕过「海报失败回退」这类额外调用。

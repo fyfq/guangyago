@@ -24,6 +24,7 @@ import Badge from '../components/ui/Badge.vue'
 import { api, statusMeta, mediaMeta, mediaLabel, type Link } from '../lib/api'
 import { toast } from '../lib/toast'
 import { confirmAction } from '../lib/confirm'
+import { safeExternalUrl } from '../lib/utils'
 
 const items = ref<Link[]>([])
 const total = ref(0)
@@ -446,9 +447,10 @@ function gotoQueue() {
                 <div class="flex items-center gap-2">
                   <span class="font-medium">{{ l.title || l.raw_title || '—' }}</span>
                   <a
-                    :href="l.url"
+                    v-if="safeExternalUrl(l.url)"
+                    :href="safeExternalUrl(l.url)"
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                     class="text-[var(--color-faint)] hover:text-[var(--color-brand)]"
                     @click.stop
                   >
@@ -604,9 +606,10 @@ function gotoQueue() {
           <div class="flex gap-2">
             <dt class="w-16 shrink-0 text-[var(--color-muted)]">链接</dt>
             <dd class="break-all">
-              <a :href="detail.url" target="_blank" rel="noreferrer" class="text-[var(--color-brand)]">
+              <a v-if="safeExternalUrl(detail.url)" :href="safeExternalUrl(detail.url)" target="_blank" rel="noopener noreferrer" class="text-[var(--color-brand)]">
                 {{ detail.url }}
               </a>
+              <span v-else>{{ detail.url }}</span>
             </dd>
           </div>
         </dl>

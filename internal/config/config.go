@@ -25,6 +25,19 @@ type Config struct {
 	Pipeline PipelineConfig `yaml:"pipeline"`
 	Proxy    ProxyConfig    `yaml:"proxy"`
 	Rate     RateConfig     `yaml:"rate_limit"`
+	SEO      SEOConfig      `yaml:"seo"`
+}
+
+// SEOConfig 收录与搜索引擎站长验证相关配置。
+type SEOConfig struct {
+	// GoogleVerification 是 Google Search Console「HTML 标签」方式给出的 token，
+	// 会被注入成 <meta name="google-site-verification" content="...">，用于站点所有权验证。
+	GoogleVerification string `yaml:"google_verification"`
+	// BaseURL 对外访问的根地址（如 https://gy.example.com）。
+	// 留空则按请求头推断；反向代理后建议固定，否则 sitemap 里的域名可能不准。
+	BaseURL string `yaml:"base_url"`
+	// SiteName 出现在结构化数据与站点地图说明中。
+	SiteName string `yaml:"site_name"`
 }
 
 // RateConfig 汇总各三方服务的限流参数。
@@ -146,6 +159,9 @@ const (
 type ServerConfig struct {
 	Addr     string `yaml:"addr"`
 	BasePath string `yaml:"base_path"`
+	// SecureCookie 强制给会话 Cookie 加 Secure 标记。反代或纯 HTTP 场景可显式设为 false；
+	// 未设置时（zero value）按请求 TLS / X-Forwarded-Proto 判定。
+	SecureCookie *bool `yaml:"secure_cookie,omitempty"`
 }
 
 type StorageConfig struct {
@@ -237,6 +253,7 @@ func Default() *Config {
 			AutoPush:   true,
 		},
 		Proxy: ProxyConfig{Enable: false},
+		SEO:   SEOConfig{SiteName: "光鸭 GO"},
 		Rate: RateConfig{
 			TMDB: TMDBRate{
 				Enable:    true,
@@ -282,6 +299,9 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("PROXY_ADDR"); v != "" {
 		cfg.Proxy.Enable = true
 		cfg.Proxy.Addr = v
+	}
+	if v := os.Getenv("SEO_BASE_URL"); v != "" {
+		cfg.SEO.BaseURL = strings.TrimRight(strings.TrimSpace(v), "/")
 	}
 	if v := os.Getenv("PROXY_USERNAME"); v != "" {
 		cfg.Proxy.Username = v

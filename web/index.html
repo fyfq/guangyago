@@ -7,13 +7,7 @@
     <meta name="description" content="光鸭 GO 资源库，分享优质网盘资源，涵盖电影、剧集等影视内容。" />
     <meta name="keywords" content="光鸭,网盘资源,电影,剧集,影视,分享" />
     <meta name="robots" content="index, follow" />
-    <script>
-      // 动态设置 canonical URL
-      const canonical = document.createElement('link')
-      canonical.rel = 'canonical'
-      canonical.href = location.origin + location.pathname
-      document.head.appendChild(canonical)
-    </script>
+    <!-- canonical 由服务端 WriteIndex 注入，避免 CSP script-src 'self' 拦截内联脚本 -->
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
     <meta property="og:title" content="光鸭 GO - 网盘资源分享平台" />

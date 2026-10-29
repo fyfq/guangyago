@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, type Component } from 'vue'
 import {
   Cloud,
+  Globe,
   Library,
   Settings as SettingsIcon,
   UsersRound,
@@ -15,11 +16,12 @@ import ScrapeView from '../views/ScrapeView.vue'
 import PushView from '../views/PushView.vue'
 import SettingsView from '../views/SettingsView.vue'
 import UsersView from '../views/UsersView.vue'
+import SEOView from '../views/SEOView.vue'
 import Card from './ui/Card.vue'
 import Button from './ui/Button.vue'
 import { api, ApiError, type User } from '../lib/api'
 
-type Tab = 'import' | 'scrape' | 'library' | 'push' | 'settings' | 'users'
+type Tab = 'import' | 'scrape' | 'library' | 'push' | 'settings' | 'users' | 'seo'
 
 const tab = ref<Tab>('library')
 const stats = ref<Record<string, number>>({})
@@ -39,6 +41,7 @@ const allTabs: { key: Tab; label: string; step?: number; icon?: Component; admin
   { key: 'library', label: '资源库', icon: Library },
   { key: 'settings', label: '设置', icon: SettingsIcon, adminOnly: true },
   { key: 'users', label: '用户管理', icon: UsersRound, adminOnly: true },
+  { key: 'seo', label: 'SEO', icon: Globe, adminOnly: true },
 ]
 
 const tabs = computed(() => allTabs.filter((t) => !t.adminOnly || me.value?.role === 'admin'))
@@ -152,7 +155,7 @@ onMounted(() => {
             >
               {{ isAdmin ? '管理员' : '运营' }}
             </span>
-            <a href="/" target="_blank" class="text-[var(--color-brand)] hover:underline">前台</a>
+            <a href="/" target="_blank" rel="noopener noreferrer" class="text-[var(--color-brand)] hover:underline">前台</a>
             <Button variant="ghost" size="sm" @click="logout">
               <LogOut class="h-4 w-4" />
               退出
@@ -232,6 +235,7 @@ onMounted(() => {
         @goto="go"
       />
       <SettingsView v-else-if="tab === 'settings' && isAdmin" />
+      <SEOView v-else-if="tab === 'seo' && isAdmin" />
       <UsersView v-else-if="tab === 'users' && me" :me="me" />
     </main>
   </div>

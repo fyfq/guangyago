@@ -30,9 +30,12 @@ func Open(dsn string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(time.Hour)
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA busy_timeout=5000",
+		"PRAGMA foreign_keys=ON",
 	} {
 		if _, err := db.Exec(pragma); err != nil {
 			db.Close()
@@ -49,8 +52,21 @@ func Open(dsn string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// schemaVersion 是当前代码期望的数据库结构版本，仅用于诊断；
+// 迁移语句本身是幂等的（IF NOT EXISTS / INSERT OR IGNORE）。
+const schemaVersion = 1
+
 func (s *Store) migrate() error {
-	const schema = `
+	if _, err := s.db.Exec(migrateSQL); err != nil {
+		return fmt.Errorf("迁移失败: %w", err)
+	}
+	if _, err := s.db.Exec(`INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)`, fmt.Sprint(schemaVersion)); err != nil {
+		return fmt.Errorf("写入 schema 版本失败: %w", err)
+	}
+	return nil
+}
+
+const migrateSQL = `
 CREATE TABLE IF NOT EXISTS links (
 	id             INTEGER PRIMARY KEY AUTOINCREMENT,
 	share_id       TEXT NOT NULL UNIQUE,
@@ -94,17 +110,32 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE TABLE IF NOT EXISTS sessions (
 	token_hash TEXT PRIMARY KEY,
-	user_id    INTEGER NOT NULL,
+	user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	expires_at INTEGER NOT NULL,
 	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS login_attempts (
+	key       TEXT PRIMARY KEY,
+	fails     INTEGER NOT NULL DEFAULT 0,
+	until_ts  INTEGER NOT NULL DEFAULT 0,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_until ON login_attempts(until_ts);
+
+CREATE TABLE IF NOT EXISTS schema_meta (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 `
-	if _, err := s.db.Exec(schema); err != nil {
-		return fmt.Errorf("迁移失败: %w", err)
-	}
-	return nil
+
+// likeEscape 把用户输入里的 LIKE 通配符转义，防止搜索关键词以 % 或 _ 操控匹配范围。
+// 需搭配 SQL 里的 ESCAPE '\' 子句使用。
+func likeEscape(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }
 
 // Create 插入一条链接，share_id 重复时跳过。返回是否真正插入。
@@ -159,8 +190,8 @@ func (s *Store) List(f model.ListFilter) ([]model.Link, int, error) {
 		args = append(args, string(f.Status))
 	}
 	if f.Keyword != "" {
-		where = append(where, "(title LIKE ? OR original_title LIKE ? OR raw_title LIKE ? OR url LIKE ? OR error LIKE ?)")
-		kw := "%" + f.Keyword + "%"
+		where = append(where, `(title LIKE ? ESCAPE '\' OR original_title LIKE ? ESCAPE '\' OR raw_title LIKE ? ESCAPE '\' OR url LIKE ? ESCAPE '\' OR error LIKE ? ESCAPE '\')`)
+		kw := "%" + likeEscape(f.Keyword) + "%"
 		args = append(args, kw, kw, kw, kw, kw)
 	}
 	clause := strings.Join(where, " AND ")

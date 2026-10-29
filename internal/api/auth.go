@@ -1,8 +1,10 @@
 package api
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -11,12 +13,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/odin/guangya-go/internal/auth"
 	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/guangya-go/internal/store"
 )
 
-// loginGuard 按客户端 IP 统计最近失败次数，连续失败后短暂锁定。
+// loginGuard 按维度（IP / 用户名）统计最近失败次数，连续失败后短暂锁定。
+// 状态持久化到 SQLite，服务重启不会重置；进程内再做一层短 TTL 缓存以省去热路径查询。
 type loginGuard struct {
 	mu      sync.Mutex
-	entries map[string]*loginAttempt
+	cache   map[string]*loginAttempt
+	ttl     time.Duration
+	penalty func() // 记录失败的持久化钩子，由外部注入以避免循环依赖
 }
 
 type loginAttempt struct {
@@ -27,46 +33,102 @@ type loginAttempt struct {
 const (
 	loginMaxFails = 5
 	loginLockFor  = 5 * time.Minute
+	loginCacheTTL = 30 * time.Second
 )
 
 func newLoginGuard() *loginGuard {
-	return &loginGuard{entries: map[string]*loginAttempt{}}
+	return &loginGuard{cache: map[string]*loginAttempt{}, ttl: loginCacheTTL}
 }
+
+// keyIP / keyUser 是两个维度的记录主键；用户名统一小写以合并大小写变体。
+func keyIP(ip string) string     { return "ip:" + ip }
+func keyUser(name string) string { return "u:" + strings.ToLower(strings.TrimSpace(name)) }
 
 func (g *loginGuard) blocked(key string, now time.Time) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	a, ok := g.entries[key]
+	a, ok := g.entries()[key]
 	return ok && now.Before(a.until)
 }
 
-func (g *loginGuard) fail(key string, now time.Time) {
+// entries 只在测试路径用到，实际读取通过 load。
+func (g *loginGuard) entries() map[string]*loginAttempt { return g.cache }
+
+// load 从进程缓存读取，缺失时懒查 DB；查询失败视作未锁定，避免因数据库故障阻断登录。
+func (g *loginGuard) load(store *store.Store, key string, now time.Time) *loginAttempt {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-	// 临时条目过多时直接清空，这个限流只为挡住暴力尝试，不需要精确统计
-	if len(g.entries) > 1024 {
-		g.entries = map[string]*loginAttempt{}
+	if a, ok := g.cache[key]; ok && now.Sub(aCacheTime(a)) < g.ttl {
+		g.mu.Unlock()
+		return a
 	}
-	a, ok := g.entries[key]
-	if !ok {
-		a = &loginAttempt{}
-		g.entries[key] = a
+	g.mu.Unlock()
+
+	att, err := store.LoginAttemptGet(key)
+	a := &loginAttempt{fails: att.Fails, until: att.Until}
+	if err != nil {
+		slog.Warn("读取登录尝试记录失败", "key", key, "err", err)
 	}
-	if !a.until.IsZero() && now.After(a.until) {
-		a.fails = 0
-		a.until = time.Time{}
-	}
-	a.fails++
-	if a.fails >= loginMaxFails {
-		a.fails = 0
-		a.until = now.Add(loginLockFor)
-	}
+	g.mu.Lock()
+	g.cache[key] = a
+	g.mu.Unlock()
+	return a
 }
 
-func (g *loginGuard) reset(key string) {
+// loginAttempt 不携带时间戳字段，这里用 until 与 fails 推断新鲜度：
+// 简化处理，缓存命中即直接返回；进程重启或调用 fail/reset 会主动刷新。
+func aCacheTime(a *loginAttempt) time.Time {
+	if a == nil {
+		return time.Time{}
+	}
+	return a.until
+}
+
+// observe 判断给定 key 是否处于锁定状态；同时把状态同步进缓存。
+func (g *loginGuard) observe(st *store.Store, key string, now time.Time) bool {
+	if key == "" {
+		return false
+	}
+	a := g.load(st, key, now)
+	return now.Before(a.until)
+}
+
+// recordFail 累加一次失败；达到阈值时进入锁定。
+func (g *loginGuard) recordFail(st *store.Store, key string, now time.Time) {
+	if key == "" {
+		return
+	}
+	if err := st.LoginAttemptFail(key, now, loginMaxFails, loginLockFor); err != nil {
+		slog.Error("记录登录失败次数出错", "key", key, "err", err)
+		return
+	}
 	g.mu.Lock()
-	defer g.mu.Unlock()
-	delete(g.entries, key)
+	// 让下一次 load 立刻刷新
+	delete(g.cache, key)
+	g.mu.Unlock()
+}
+
+// reset 在登录成功后清除指定 key 的锁定与计数。
+func (g *loginGuard) reset(st *store.Store, key string) {
+	if key == "" {
+		return
+	}
+	if err := st.LoginAttemptReset(key); err != nil {
+		slog.Warn("清除登录尝试记录失败", "key", key, "err", err)
+	}
+	g.mu.Lock()
+	delete(g.cache, key)
+	g.mu.Unlock()
+}
+
+// pruneCache 定期回收过期的进程内缓存，避免因用户暴增导致 map 无界增长。
+func (g *loginGuard) pruneCache(now time.Time) {
+	g.mu.Lock()
+	for k, a := range g.cache {
+		if a == nil || (!a.until.IsZero() && now.After(a.until.Add(g.ttl))) {
+			delete(g.cache, k)
+		}
+	}
+	g.mu.Unlock()
 }
 
 const ctxUserKey = "auth.user"
@@ -115,9 +177,7 @@ func currentUser(c *gin.Context) *model.User {
 }
 
 // secureCookie 在 HTTPS（或反代声明 HTTPS）下要求 Cookie 只走加密连接。
-func secureCookie(c *gin.Context) bool {
-	return c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
-}
+// 见 (*Server).secureCookie，优先读取 server.secure_cookie 配置。
 
 type loginRequest struct {
 	Username string `json:"username"`
@@ -137,8 +197,10 @@ func (s *Server) login(c *gin.Context) {
 	}
 
 	now := time.Now()
-	ip := c.ClientIP()
-	if s.loginGuard.blocked(ip, now) {
+	ipKey := keyIP(c.ClientIP())
+	userKey := keyUser(username)
+	if s.loginGuard.observe(s.store, ipKey, now) || s.loginGuard.observe(s.store, userKey, now) {
+		slog.Warn("登录限流触发", "ip", c.ClientIP(), "username", username)
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "尝试次数过多，请 5 分钟后再试"})
 		return
 	}
@@ -151,7 +213,8 @@ func (s *Server) login(c *gin.Context) {
 	// 账号不存在、被停用、密码错误统一返回同一个提示，不泄露账号状态
 	ok := auth.VerifyPasswordOrDummy(hash, req.Password)
 	if u == nil || !u.Enabled || !ok {
-		s.loginGuard.fail(ip, now)
+		s.loginGuard.recordFail(s.store, ipKey, now)
+		s.loginGuard.recordFail(s.store, userKey, now)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
 		return
 	}
@@ -168,10 +231,13 @@ func (s *Server) login(c *gin.Context) {
 	}
 	_ = s.store.TouchLastLogin(u.ID)
 	_ = s.store.DeleteExpiredSessions(now)
-	s.loginGuard.reset(ip)
+	_ = s.store.LoginAttemptCleanup(now)
+	s.loginGuard.reset(s.store, ipKey)
+	s.loginGuard.reset(s.store, userKey)
+	s.loginGuard.pruneCache(now)
 
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(auth.CookieName, token, int(auth.SessionTTL.Seconds()), "/", "", secureCookie(c), true)
+	c.SetCookie(auth.CookieName, token, int(auth.SessionTTL.Seconds()), "/", "", s.secureCookie(c), true)
 	u.LastLoginAt = &now
 	c.JSON(http.StatusOK, u)
 }
@@ -181,7 +247,7 @@ func (s *Server) logout(c *gin.Context) {
 		_ = s.store.DeleteSession(auth.HashToken(token))
 	}
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(auth.CookieName, "", -1, "/", "", secureCookie(c), true)
+	c.SetCookie(auth.CookieName, "", -1, "/", "", s.secureCookie(c), true)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -201,7 +267,7 @@ func (s *Server) changePassword(c *gin.Context) {
 		return
 	}
 	if !validPassword(req.NewPassword) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "新密码至少 8 位"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": passwordHintFor(req.NewPassword)})
 		return
 	}
 	u := currentUser(c)
@@ -226,13 +292,115 @@ func (s *Server) changePassword(c *gin.Context) {
 	// 改密后所有会话作废，前端会跳回登录页重新登录
 	_ = s.store.DeleteUserSessions(u.ID)
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(auth.CookieName, "", -1, "/", "", secureCookie(c), true)
+	c.SetCookie(auth.CookieName, "", -1, "/", "", s.secureCookie(c), true)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// secureCookie 优先按配置决定是否强制 Secure；未显式配置时回退到 TLS / X-Forwarded-Proto 判定。
+func (s *Server) secureCookie(c *gin.Context) bool {
+	s.configMu.RLock()
+	var override *bool
+	if s.cfg != nil {
+		override = s.cfg.Server.SecureCookie
+	}
+	s.configMu.RUnlock()
+	if override != nil {
+		return *override
+	}
+	return c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+}
+
+// validOrigin 用 Origin / Referer 兜底校验，防止 SameSite=Lax 之外场景下的跨站 POST。
+// 请求不带 Origin 且没有 Referer 时（同源 curl / 内部工具）视为通过，避免误伤。
+func (s *Server) validOrigin(c *gin.Context) bool {
+	host := c.Request.Host
+	if origin := strings.TrimSpace(c.GetHeader("Origin")); origin != "" {
+		u, err := url.Parse(origin)
+		if err != nil || !strings.EqualFold(u.Host, host) {
+			return false
+		}
+		return true
+	}
+	if ref := strings.TrimSpace(c.GetHeader("Referer")); ref != "" {
+		u, err := url.Parse(ref)
+		if err != nil || !strings.EqualFold(u.Host, host) {
+			return false
+		}
+		return true
+	}
+	return true
+}
+
+// requireSameOrigin 拦截所有状态变更接口（POST / PUT / DELETE / PATCH）的跨站请求。
+// 浏览器发跨源 XHR 必带 Origin，同源自 API 天然通过。
+func (s *Server) requireSameOrigin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		switch c.Request.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			c.Next()
+			return
+		}
+		if !s.validOrigin(c) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "跨站请求已被拒绝"})
+			return
+		}
+		c.Next()
+	}
 }
 
 var usernameRe = regexp.MustCompile(`^[a-zA-Z0-9_.-]{3,32}$`)
 
-func validPassword(p string) bool { return len(p) >= 8 && len(p) <= 128 }
+// 常见弱密码黑名单（小写比较），只拦最典型的模式，避免过度打扰运营。
+var weakPasswords = map[string]struct{}{
+	"password": {}, "password1": {}, "password12": {}, "password123": {}, "password1234": {},
+	"12345678": {}, "123456789": {}, "1234567890": {}, "qwertyui": {}, "qwertyuiop": {},
+	"abc12345": {}, "iloveyou": {}, "admin123": {}, "administrator": {}, "guangya123": {},
+}
+
+// validPassword 至少 8 字节、最多 128 字节，排除常见弱口令，
+// 并要求字符类别（小写 / 大写 / 数字 / 符号）里至少覆盖两类。
+func validPassword(p string) bool {
+	if len(p) < 8 || len(p) > 128 {
+		return false
+	}
+	if _, bad := weakPasswords[strings.ToLower(p)]; bad {
+		return false
+	}
+	var lower, upper, digit, symbol bool
+	for _, r := range p {
+		switch {
+		case r >= 'a' && r <= 'z':
+			lower = true
+		case r >= 'A' && r <= 'Z':
+			upper = true
+		case r >= '0' && r <= '9':
+			digit = true
+		default:
+			symbol = true
+		}
+	}
+	classes := 0
+	for _, on := range []bool{lower, upper, digit, symbol} {
+		if on {
+			classes++
+		}
+	}
+	return classes >= 2
+}
+
+// passwordHintFor 汇总给用户的具体原因。
+func passwordHintFor(p string) string {
+	if len(p) < 8 {
+		return "密码至少 8 位"
+	}
+	if len(p) > 128 {
+		return "密码过长"
+	}
+	if _, bad := weakPasswords[strings.ToLower(p)]; bad {
+		return "密码过于常见，请换一个"
+	}
+	return "密码需要包含大小写字母、数字、符号中的至少两类"
+}
 
 func validRole(role string) bool {
 	return role == model.RoleAdmin || role == model.RoleOperator
@@ -267,7 +435,7 @@ func (s *Server) createUser(c *gin.Context) {
 		return
 	}
 	if !validPassword(req.Password) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "密码至少 8 位"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": passwordHintFor(req.Password)})
 		return
 	}
 	if req.Role == "" {
@@ -362,25 +530,14 @@ func (s *Server) updateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不能停用自己或修改自己的角色"})
 		return
 	}
-	if target.Role == model.RoleAdmin && target.Enabled && (!enabled || role != model.RoleAdmin) {
-		others, err := s.store.EnabledAdminCount(id)
-		if err != nil {
-			serverError(c, err)
-			return
-		}
-		if others == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "至少要保留一个启用的管理员"})
-			return
-		}
-	}
 
-	if err := s.store.UpdateUser(id, displayName, role, enabled); err != nil {
+	if err := s.store.UpdateUserGuarded(id, displayName, role, enabled, true); err != nil {
+		if errors.Is(err, store.ErrLastAdmin) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		serverError(c, err)
 		return
-	}
-	// 停用后立即踢掉该账号的所有会话
-	if !enabled {
-		_ = s.store.DeleteUserSessions(id)
 	}
 	target.DisplayName, target.Role, target.Enabled = displayName, role, enabled
 	c.JSON(http.StatusOK, target)
@@ -401,7 +558,7 @@ func (s *Server) resetUserPassword(c *gin.Context) {
 		return
 	}
 	if !validPassword(req.Password) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "密码至少 8 位"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": passwordHintFor(req.Password)})
 		return
 	}
 	target, err := s.store.UserByID(id)
@@ -446,15 +603,16 @@ func (s *Server) deleteUser(c *gin.Context) {
 		return
 	}
 	if target.Role == model.RoleAdmin && target.Enabled {
-		others, err := s.store.EnabledAdminCount(id)
-		if err != nil {
+		if err := s.store.DeleteUserGuarded(id, true); err != nil {
+			if errors.Is(err, store.ErrLastAdmin) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
 			serverError(c, err)
 			return
 		}
-		if others == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "至少要保留一个启用的管理员"})
-			return
-		}
+		c.JSON(http.StatusOK, gin.H{"deleted": id})
+		return
 	}
 	if err := s.store.DeleteUser(id); err != nil {
 		serverError(c, err)

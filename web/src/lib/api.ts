@@ -57,6 +57,12 @@ export interface ProxyState {
   has_password: boolean
 }
 
+export interface SEOState {
+  google_verification: string
+  base_url: string
+  site_name: string
+}
+
 export interface Settings {
   tmdb_configured: boolean
   telegram_configured: boolean
@@ -65,6 +71,7 @@ export interface Settings {
   workers: number
   proxy?: ProxyState
   rate_limit?: RateLimit
+  seo?: SEOState
 }
 
 export interface SettingsInput {
@@ -90,6 +97,7 @@ export interface SettingsInput {
     }
     guangya?: { enable?: boolean; concurrency?: number }
   }
+  seo?: { google_verification?: string; base_url?: string; site_name?: string }
 }
 
 export interface TestResult {

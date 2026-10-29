@@ -55,7 +55,7 @@ func (s *Server) setup(c *gin.Context) {
 		return
 	}
 	if !validPassword(req.Password) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "密码至少 8 位"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": passwordHintFor(req.Password)})
 		return
 	}
 	if len(req.DisplayName) > 40 {

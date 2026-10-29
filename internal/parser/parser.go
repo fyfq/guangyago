@@ -14,6 +14,9 @@ const (
 	SourceGuangya = "guangya"
 )
 
+// maxCSVBytes 是解析器允许的单次 CSV 输入上限，配合调用方的请求体限制形成纵深防御。
+const maxCSVBytes = 32 << 20 // 32 MB
+
 // Entry 是从分享文本或 CSV 中解析出的单条记录。
 type Entry struct {
 	ShareID     string
@@ -51,7 +54,8 @@ var (
 func ParseText(text string) ([]Entry, []RowError) {
 	entries := []Entry{}
 	errs := []RowError{}
-	matches := urlRe.FindAllStringSubmatch(text, -1)
+	// 单次粘贴上限 500 条，足够覆盖运营批量补录，也防止恶意超长输入耗尽匹配
+	matches := urlRe.FindAllStringSubmatch(text, 500)
 	if len(matches) == 0 {
 		return entries, append(errs, RowError{Err: "未找到光鸭云盘链接"})
 	}
@@ -90,9 +94,12 @@ func ParseText(text string) ([]Entry, []RowError) {
 // ParseCSV 解析光鸭批量分享记录 CSV，列头为：文件名,链接,提取码,分享时间,分享状态。
 func ParseCSV(r io.Reader) ([]Entry, []RowError) {
 	errs := []RowError{}
-	raw, err := io.ReadAll(r)
+	raw, err := io.ReadAll(io.LimitReader(r, maxCSVBytes+1))
 	if err != nil {
 		return nil, []RowError{{Err: "读取内容失败: " + err.Error()}}
+	}
+	if len(raw) > maxCSVBytes {
+		return nil, []RowError{{Err: "CSV 超过 32MB 上限，请拆分后上传"}}
 	}
 	reader := csv.NewReader(strings.NewReader(strings.TrimPrefix(string(raw), "\ufeff")))
 	reader.FieldsPerRecord = -1

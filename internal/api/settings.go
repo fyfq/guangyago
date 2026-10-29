@@ -29,8 +29,8 @@ func (s *Server) settings(c *gin.Context) {
 	autoPush := cfg.Pipeline.AutoPush
 	workers := cfg.Pipeline.Workers
 	proxyEnable := cfg.Proxy.Enable
-	proxyAddr := maskString(cfg.Proxy.Addr)
-	proxyUser := maskString(cfg.Proxy.Username)
+	proxyAddr := cfg.Proxy.Addr
+	proxyUser := cfg.Proxy.Username
 	hasProxyPass := cfg.Proxy.Password != ""
 	rateTMDBEnable := cfg.Rate.TMDB.Enable
 	rateTMDBPerSec := cfg.Rate.TMDB.PerSecond
@@ -43,6 +43,9 @@ func (s *Server) settings(c *gin.Context) {
 	rateTGPaid := cfg.Rate.Telegram.PaidBroadcast
 	rateGYEnable := cfg.Rate.Guangya.Enable
 	rateGYConc := cfg.Rate.Guangya.Concurrency
+	googleVerification := cfg.SEO.GoogleVerification
+	seoBaseURL := cfg.SEO.BaseURL
+	siteName := cfg.SEO.SiteName
 	s.configMu.RUnlock()
 
 	c.JSON(http.StatusOK, gin.H{
@@ -76,19 +79,12 @@ func (s *Server) settings(c *gin.Context) {
 				"concurrency": rateGYConc,
 			},
 		},
+		"seo": gin.H{
+			"google_verification": googleVerification,
+			"base_url":            seoBaseURL,
+			"site_name":           siteName,
+		},
 	})
-}
-
-// maskString 把字符串中间部分替换为 *，只保留首尾各一个字符；过短则全部遮盖。
-func maskString(s string) string {
-	if s == "" {
-		return ""
-	}
-	runes := []rune(s)
-	if len(runes) <= 3 {
-		return strings.Repeat("*", len(runes))
-	}
-	return string(runes[0]) + strings.Repeat("*", len(runes)-2) + string(runes[len(runes)-1])
 }
 
 type settingsRequest struct {
@@ -122,6 +118,12 @@ type settingsRequest struct {
 			Concurrency *int  `json:"concurrency"`
 		} `json:"guangya"`
 	} `json:"rate_limit"`
+	SEO *struct {
+		// 用指针区分「不修改」和「清空」，token 留空即可撤销验证标签。
+		GoogleVerification *string `json:"google_verification"`
+		BaseURL            *string `json:"base_url"`
+		SiteName           *string `json:"site_name"`
+	} `json:"seo"`
 }
 
 // updateSettings 更新运行期配置，可选写回配置文件。
@@ -210,6 +212,30 @@ func (s *Server) updateSettings(c *gin.Context) {
 			if y.Concurrency != nil {
 				cfg.Rate.Guangya.Concurrency = *y.Concurrency
 			}
+		}
+	}
+	if seo := req.SEO; seo != nil {
+		if seo.GoogleVerification != nil {
+			token := strings.TrimSpace(*seo.GoogleVerification)
+			// 空串表示撤销验证标签
+			if token != "" && !googleTokenRe.MatchString(token) {
+				s.configMu.Unlock()
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Google 站点验证码格式不正确"})
+				return
+			}
+			cfg.SEO.GoogleVerification = token
+		}
+		if seo.BaseURL != nil {
+			base := strings.TrimRight(strings.TrimSpace(*seo.BaseURL), "/")
+			if base != "" && !strings.HasPrefix(base, "https://") && !strings.HasPrefix(base, "http://") {
+				s.configMu.Unlock()
+				c.JSON(http.StatusBadRequest, gin.H{"error": "站点根地址需要以 http:// 或 https:// 开头"})
+				return
+			}
+			cfg.SEO.BaseURL = base
+		}
+		if seo.SiteName != nil {
+			cfg.SEO.SiteName = strings.TrimSpace(*seo.SiteName)
 		}
 	}
 	var saveErr error

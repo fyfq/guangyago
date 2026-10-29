@@ -17,6 +17,7 @@ import Button from '../components/ui/Button.vue'
 import Badge from '../components/ui/Badge.vue'
 import { api, mediaMeta, type PortalLink, type PortalStats } from '../lib/api'
 import { toast } from '../lib/toast'
+import { safeExternalUrl } from '../lib/utils'
 
 const PAGE = 24
 const items = ref<PortalLink[]>([])
@@ -516,7 +517,7 @@ onUnmounted(() => {
                 <Copy class="h-4 w-4" />
                 复制链接{{ detail.code ? '与提取码' : '' }}
               </Button>
-              <a v-if="detail.url" :href="detail.url" target="_blank" rel="noreferrer">
+              <a v-if="detail.url && safeExternalUrl(detail.url)" :href="safeExternalUrl(detail.url)" target="_blank" rel="noopener noreferrer">
                 <Button size="sm" variant="outline">
                   <ExternalLink class="h-4 w-4" />
                   打开光鸭

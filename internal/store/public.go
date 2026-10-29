@@ -76,8 +76,8 @@ func publicWhereClause(f model.PublicFilter, withMedia, withYear bool) (string, 
 		args = append(args, string(f.MediaType))
 	}
 	if kw := strings.TrimSpace(f.Keyword); kw != "" {
-		where = append(where, "(title LIKE ? OR original_title LIKE ? OR genres LIKE ?)")
-		like := "%" + kw + "%"
+		where = append(where, `(title LIKE ? ESCAPE '\' OR original_title LIKE ? ESCAPE '\' OR genres LIKE ? ESCAPE '\')`)
+		like := "%" + likeEscape(kw) + "%"
 		args = append(args, like, like, like)
 	}
 	if withYear && f.Year > 0 {

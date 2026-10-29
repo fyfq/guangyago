@@ -153,6 +153,95 @@ func (s *Store) EnabledAdminCount(excludeID int64) (int, error) {
 	return n, err
 }
 
+// ErrLastAdmin 表示操作会让系统失去最后一个启用的管理员，调用方据此回 4xx。
+var ErrLastAdmin = errors.New("至少要保留一个启用的管理员")
+
+// UpdateUserGuarded 在事务里同时校验「至少保留一个启用管理员」并更新账号，
+// 避免与并发调用形成 TOCTOU。preserveLastAdmin=true 且当前目标是启用管理员、
+// 且新值会取消启用或降级角色时，若没有其他启用管理员则拒绝。
+func (s *Store) UpdateUserGuarded(id int64, displayName, role string, enabled bool, preserveLastAdmin bool) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if preserveLastAdmin {
+		var curRole string
+		var curEnabled int
+		if err := tx.QueryRow(`SELECT role, enabled FROM users WHERE id = ?`, id).Scan(&curRole, &curEnabled); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		losing := curRole == model.RoleAdmin && curEnabled == 1 &&
+			(!enabled || role != model.RoleAdmin)
+		if losing {
+			var others int
+			if err := tx.QueryRow(
+				`SELECT COUNT(*) FROM users WHERE role = ? AND enabled = 1 AND id <> ?`,
+				model.RoleAdmin, id).Scan(&others); err != nil {
+				return err
+			}
+			if others == 0 {
+				return ErrLastAdmin
+			}
+		}
+	}
+
+	if _, err := tx.Exec(
+		`UPDATE users SET display_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		displayName, role, enabled, id); err != nil {
+		return err
+	}
+	if !enabled {
+		if _, err := tx.Exec(`DELETE FROM sessions WHERE user_id = ?`, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// DeleteUserGuarded 事务化删除账号：校验最后一个启用管理员，同时清掉会话。
+func (s *Store) DeleteUserGuarded(id int64, preserveLastAdmin bool) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if preserveLastAdmin {
+		var curRole string
+		var curEnabled int
+		if err := tx.QueryRow(`SELECT role, enabled FROM users WHERE id = ?`, id).Scan(&curRole, &curEnabled); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		if curRole == model.RoleAdmin && curEnabled == 1 {
+			var others int
+			if err := tx.QueryRow(
+				`SELECT COUNT(*) FROM users WHERE role = ? AND enabled = 1 AND id <> ?`,
+				model.RoleAdmin, id).Scan(&others); err != nil {
+				return err
+			}
+			if others == 0 {
+				return ErrLastAdmin
+			}
+		}
+	}
+
+	if _, err := tx.Exec(`DELETE FROM sessions WHERE user_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM users WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // CreateSession 保存会话摘要。
 func (s *Store) CreateSession(userID int64, tokenHash string, expiresAt time.Time) error {
 	_, err := s.db.Exec(

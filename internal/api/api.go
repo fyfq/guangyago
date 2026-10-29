@@ -57,6 +57,9 @@ func (s *Server) WithRuntime(p *pipeline.Pipeline, cfg *config.Config, path stri
 
 // Register 挂载路由。
 func (s *Server) Register(r *gin.Engine) {
+	// 全局 CSRF 防线：对所有状态变更接口检查 Origin/Referer，与 SameSite=Lax 一起构成双保险。
+	r.Use(s.requireSameOrigin())
+
 	r.GET("/api/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})

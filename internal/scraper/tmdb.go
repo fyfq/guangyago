@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -44,15 +45,35 @@ func IsBearer(key string) bool {
 	return strings.HasPrefix(key, "eyJ") || len(key) > 64
 }
 
+// allowedImageHosts 白名单只放行 TMDB 官方图片域名，避免用户或入侵者把 image_base
+// 改到内网/云元数据地址触发 SSRF。
+var allowedImageHosts = map[string]bool{
+	"image.tmdb.org":     true,
+	"themoviedb.org":     true,
+	"api.themoviedb.org": true,
+}
+
+// validateImageBase 检查图片基址的 host 是否在允许清单里；不在时返回默认值。
+func validateImageBase(base string) string {
+	if base == "" {
+		return "https://image.tmdb.org/t/p"
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme != "https" || !allowedImageHosts[strings.ToLower(u.Hostname())] {
+		return "https://image.tmdb.org/t/p"
+	}
+	return base
+}
+
 // New 构造客户端；API Key 为空时返回 (nil, nil)，调用方需据此提示未配置。
 // proxy 为空指针或零值时直连；rate 为 nil 时使用官方建议的默认限流值。
 func New(cfg config.TMDBConfig, posterDir string, proxy *config.ProxyConfig, rate *config.TMDBRate) (*Client, error) {
 	if cfg.APIKey == "" {
 		return nil, nil
 	}
-	base := cfg.ImageBase
-	if base == "" {
-		base = "https://image.tmdb.org/t/p"
+	base := validateImageBase(cfg.ImageBase)
+	if base != cfg.ImageBase && cfg.ImageBase != "" {
+		slog.Warn("TMDB image_base 不在允许域名内，已回退到默认值", "input", cfg.ImageBase)
 	}
 	size := cfg.PosterSize
 	if size == "" {
@@ -117,12 +138,15 @@ func TestConnection(ctx context.Context, apiKey string, proxy *config.ProxyConfi
 		return netutil.TestResult{Message: "连接 TMDB 失败，检查网络或代理", Detail: err.Error(), Elapsed: since(start)}
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes))
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return netutil.TestResult{Message: "API Key 无效（TMDB 返回 " + strconv.Itoa(resp.StatusCode) + "）", Elapsed: since(start)}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return netutil.TestResult{Message: "TMDB 返回 " + strconv.Itoa(resp.StatusCode), Detail: strings.TrimSpace(string(body)), Elapsed: since(start)}
+	}
+	if readErr != nil {
+		return netutil.TestResult{Message: "读取 TMDB 响应失败", Detail: readErr.Error(), Elapsed: since(start)}
 	}
 	var cfgResp struct {
 		Images struct {
@@ -364,6 +388,9 @@ func scoreMatch(cand *Result, ref MatchRef) float64 {
 // maxAttempts 是单次请求的最大尝试次数；遇到 429 会按 Retry-After 退让后重试。
 const maxAttempts = 3
 
+// maxAPIResponseBytes 是 TMDB 单次响应的最大可读字节数，防止异常/被劫持的上游把内存吃满。
+const maxAPIResponseBytes = 2 << 20 // 2 MB
+
 func (c *Client) get(ctx context.Context, path string, params url.Values, out any) error {
 	u := baseURL + path
 	if !c.bearer {
@@ -387,7 +414,7 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 		if err != nil {
 			return err
 		}
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes))
 		resp.Body.Close()
 		if err != nil {
 			return err
@@ -890,11 +917,4 @@ func yearOf(date string) int {
 	}
 	y, _ := strconv.Atoi(date[:4])
 	return y
-}
-
-func abs(n int) int {
-	if n < 0 {
-		return -n
-	}
-	return n
 }

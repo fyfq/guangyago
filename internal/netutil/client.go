@@ -46,6 +46,8 @@ type TestResult struct {
 }
 
 // TestProxy 通过代理访问外网，验证代理可用并返回出口 IP（拿不到不影响结论）。
+// 只要 TCP 层能拿到对端响应就视为代理链路可用；4xx/5xx 说明请求已透传，仍然算成功。
+// 但对 5xx 显式提示，避免误报为「一切正常」。
 func TestProxy(ctx context.Context, addr, username, password string, enable bool) TestResult {
 	start := time.Now()
 	if !enable || strings.TrimSpace(addr) == "" {
@@ -65,13 +67,18 @@ func TestProxy(ctx context.Context, addr, username, password string, enable bool
 		return TestResult{Message: "通过代理访问 " + probe + " 失败", Detail: err.Error(), Elapsed: msSince(start)}
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 
 	detail := ""
 	if ip := outboundIP(ctx, hc); ip != "" {
 		detail = "出口 IP：" + ip
 	}
-	return TestResult{OK: true, Message: "代理可用，已连通 Telegram（HTTP " + strconv.Itoa(resp.StatusCode) + "）", Detail: detail, Elapsed: msSince(start)}
+	ok := resp.StatusCode < 500
+	msg := "代理可用，已连通 Telegram（HTTP " + strconv.Itoa(resp.StatusCode) + "）"
+	if !ok {
+		msg = "代理链路可达，但 Telegram 返回 HTTP " + strconv.Itoa(resp.StatusCode)
+	}
+	return TestResult{OK: ok, Message: msg, Detail: detail, Elapsed: msSince(start)}
 }
 
 func outboundIP(ctx context.Context, hc *http.Client) string {
@@ -98,6 +105,7 @@ func msSince(start time.Time) int64 {
 }
 
 // HTTPClient 按代理配置构造客户端。未启用代理时返回默认传输。
+// 显式设置 MaxConnsPerHost 与 IdleConnTimeout，避免突发把出向连接耗尽。
 func HTTPClient(addr string, username, password string, enable bool, timeout time.Duration) (*http.Client, error) {
 	u, err := ProxyURL(addr, username, password, enable)
 	if err != nil {
@@ -106,7 +114,14 @@ func HTTPClient(addr string, username, password string, enable bool, timeout tim
 	if timeout <= 0 {
 		timeout = 20 * time.Second
 	}
-	tr := &http.Transport{}
+	tr := &http.Transport{
+		MaxIdleConns:          64,
+		MaxIdleConnsPerHost:   8,
+		MaxConnsPerHost:       16,
+		IdleConnTimeout:       60 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	if u != nil {
 		tr.Proxy = http.ProxyURL(u)
 	}

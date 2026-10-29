@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -58,6 +59,17 @@ func main() {
 		os.Exit(1)
 	}
 	defer st.Close()
+
+	// 加载或首次生成会话密钥（HMAC-SHA256 令牌摘要）；文件位于 DataDir 下，权限 0600。
+	dataDir := cfg.Storage.DataDir
+	if dataDir == "" {
+		dataDir = filepath.Dir(cfg.Storage.DSN)
+	}
+	if key, err := auth.LoadOrCreateSessionKey(dataDir); err != nil {
+		slog.Warn("会话密钥不可用，退化为裸 SHA-256 摘要", "err", err)
+	} else {
+		auth.SetSessionSecret(key)
+	}
 
 	if *importPath != "" {
 		if err := runImport(st, *importPath); err != nil {
@@ -165,6 +177,7 @@ func main() {
 
 	// 前端构建产物托管：非 /api 路径一律回落到 index.html
 	if fsys := web.FS(); fsys != nil {
+		staticFS := http.FS(fsys)
 		r.NoRoute(func(c *gin.Context) {
 			if strings.HasPrefix(c.Request.URL.Path, "/api/") {
 				c.JSON(http.StatusNotFound, gin.H{"error": "接口不存在"})
@@ -172,11 +185,12 @@ func main() {
 			}
 			if f, err := fsys.Open(strings.TrimPrefix(path.Clean(c.Request.URL.Path), "/")); err == nil {
 				_ = f.Close()
-				c.FileFromFS(c.Request.URL.Path, fsys)
+				c.FileFromFS(c.Request.URL.Path, staticFS)
 				return
 			}
-			// 找不到对应静态文件时回落到首页，交给前端路由
-			c.FileFromFS("/", fsys)
+			// 找不到对应静态文件时回落到首页，交给前端路由；
+			// 首页走 WriteIndex 是为了把站长验证 meta 注入原始 HTML。
+			srv.WriteIndex(c, fsys)
 		})
 	}
 
@@ -190,6 +204,9 @@ func main() {
 	}()
 
 	<-ctx.Done()
+	if pipe != nil {
+		pipe.Stop()
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -200,16 +217,21 @@ func main() {
 }
 
 // securityHeaders 补齐基础安全响应头，并禁止缓存接口响应。
+// HSTS 只在 TLS 直连时下发：反向代理场景由边缘终止 TLS，此处误发会让浏览器把 http:// 强跳成 https://。
 func securityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := c.Writer.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 		h.Set("Content-Security-Policy",
 			"default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; "+
 				"script-src 'self'; connect-src 'self'; font-src 'self' data:; object-src 'none'; "+
 				"base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+		if c.Request.TLS != nil {
+			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
 			h.Set("Cache-Control", "no-store")
 		}

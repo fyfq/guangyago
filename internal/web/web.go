@@ -3,14 +3,13 @@ package web
 import (
 	"embed"
 	"io/fs"
-	"net/http"
 )
 
 //go:embed all:dist
 var dist embed.FS
 
-// FS 返回前端构建产物。若未构建（dist 中无 index.html）则返回 nil。
-func FS() http.FileSystem {
+// FS 返回前端构建产物的 fs.FS。若未构建（dist 中无 index.html）则返回 nil。
+func FS() fs.FS {
 	sub, err := fs.Sub(dist, "dist")
 	if err != nil {
 		return nil
@@ -20,5 +19,5 @@ func FS() http.FileSystem {
 	} else {
 		_ = f.Close()
 	}
-	return http.FS(sub)
+	return sub
 }

@@ -197,7 +197,7 @@ onMounted(async () => {
               />
               <p class="mt-1 text-xs text-[var(--color-faint)]">
                 在
-                <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener" class="text-[var(--color-brand)] hover:underline">
+                <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer" class="text-[var(--color-brand)] hover:underline">
                   themoviedb.org
                 </a>
                 申请 API Key

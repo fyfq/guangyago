@@ -32,10 +32,16 @@ type Notifier struct {
 // New 构造推送器；Token 为空时返回 (nil, nil)。
 // rate 为 nil 时使用官方建议的默认间隔。
 func New(cfg config.TelegramConfig, proxy *config.ProxyConfig, rate *config.TelegramRate) (*Notifier, error) {
+	return NewAtServerURL(cfg, proxy, rate, "")
+}
+
+// NewAtServerURL 与 New 相同，只把 Telegram API 根地址换成 serverURL
+//（空值走官方地址）。测试接缝：离线单测用它接一个假 Bot API，不走外网。
+func NewAtServerURL(cfg config.TelegramConfig, proxy *config.ProxyConfig, rate *config.TelegramRate, serverURL string) (*Notifier, error) {
 	if cfg.Token == "" {
 		return nil, nil
 	}
-	b, err := newBot(cfg, proxy)
+	b, err := newBot(cfg, proxy, serverURL)
 	if err != nil {
 		return nil, err
 	}
@@ -59,24 +65,35 @@ func newLimiter(rate *config.TelegramRate) *ratelimit.Limiter {
 }
 
 // newBot 按代理配置构造 Bot，未启用代理时保持库的默认客户端。
-func newBot(cfg config.TelegramConfig, proxy *config.ProxyConfig) (*bot.Bot, error) {
+// serverURL 非空时把 Bot API 指向该地址（测试用假服务），其余行为不变。
+func newBot(cfg config.TelegramConfig, proxy *config.ProxyConfig, serverURL string) (*bot.Bot, error) {
+	var opts []bot.Option
+	if serverURL != "" {
+		opts = append(opts, bot.WithServerURL(serverURL))
+	}
 	if proxy == nil || !proxy.Enable {
-		return bot.New(cfg.Token)
+		return bot.New(cfg.Token, opts...)
 	}
 	hc, err := netutil.HTTPClient(proxy.Addr, proxy.Username, proxy.Password, true, 40*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	return bot.New(cfg.Token, bot.WithHTTPClient(10*time.Second, hc))
+	opts = append(opts, bot.WithHTTPClient(10*time.Second, hc))
+	return bot.New(cfg.Token, opts...)
 }
 
 // TestTelegram 验证 Bot Token 与频道 ID：getMe → getChat → Bot 在频道内的身份。
 func TestTelegram(ctx context.Context, cfg config.TelegramConfig, proxy *config.ProxyConfig) netutil.TestResult {
+	return testTelegramAt(ctx, cfg, proxy, "")
+}
+
+// testTelegramAt 是 TestTelegram 的可注入 Bot API 地址版本，测试里指向假服务。
+func testTelegramAt(ctx context.Context, cfg config.TelegramConfig, proxy *config.ProxyConfig, serverURL string) netutil.TestResult {
 	start := time.Now()
 	if strings.TrimSpace(cfg.Token) == "" {
 		return netutil.TestResult{Message: "还没有填写 Bot Token"}
 	}
-	b, err := newBot(cfg, proxy)
+	b, err := newBot(cfg, proxy, serverURL)
 	if err != nil {
 		return netutil.TestResult{Message: "Bot 初始化失败", Detail: err.Error()}
 	}

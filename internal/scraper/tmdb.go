@@ -22,10 +22,13 @@ import (
 	"github.com/odin/guangya-go/internal/ratelimit"
 )
 
-const baseURL = "https://api.themoviedb.org/3"
+// defaultAPIBase 是 TMDB v3 的官方根地址。
+const defaultAPIBase = "https://api.themoviedb.org/3"
 
 // Client 是 TMDB v3 的薄封装。
 type Client struct {
+	// apiBase 是请求根地址，生产恒为 defaultAPIBase；测试里指向假 TMDB 服务。
+	apiBase    string
 	apiKey     string
 	bearer     bool
 	language   string
@@ -68,8 +71,17 @@ func validateImageBase(base string) string {
 // New 构造客户端；API Key 为空时返回 (nil, nil)，调用方需据此提示未配置。
 // proxy 为空指针或零值时直连；rate 为 nil 时使用官方建议的默认限流值。
 func New(cfg config.TMDBConfig, posterDir string, proxy *config.ProxyConfig, rate *config.TMDBRate) (*Client, error) {
+	return NewAtAPIBase(cfg, posterDir, proxy, rate, defaultAPIBase)
+}
+
+// NewAtAPIBase 与 New 相同，只把请求根地址换成 apiBase（空值回退官方地址）。
+// 测试接缝：离线单测与流水线冒烟用它接一个假 TMDB，不走外网。
+func NewAtAPIBase(cfg config.TMDBConfig, posterDir string, proxy *config.ProxyConfig, rate *config.TMDBRate, apiBase string) (*Client, error) {
 	if cfg.APIKey == "" {
 		return nil, nil
+	}
+	if apiBase == "" {
+		apiBase = defaultAPIBase
 	}
 	base := validateImageBase(cfg.ImageBase)
 	if base != cfg.ImageBase && cfg.ImageBase != "" {
@@ -88,6 +100,7 @@ func New(cfg config.TMDBConfig, posterDir string, proxy *config.ProxyConfig, rat
 		return nil, err
 	}
 	return &Client{
+		apiBase:    apiBase,
 		apiKey:     cfg.APIKey,
 		bearer:     IsBearer(cfg.APIKey),
 		language:   lang,
@@ -112,6 +125,11 @@ func newLimiter(rate *config.TMDBRate) *ratelimit.Limiter {
 
 // TestConnection 验证 TMDB API Key 是否可用，用于设置页的连通性测试。
 func TestConnection(ctx context.Context, apiKey string, proxy *config.ProxyConfig) netutil.TestResult {
+	return testConnectionAt(ctx, apiKey, proxy, defaultAPIBase)
+}
+
+// testConnectionAt 是 TestConnection 的可注入根地址版本，测试里指向假 TMDB。
+func testConnectionAt(ctx context.Context, apiKey string, proxy *config.ProxyConfig, apiBase string) netutil.TestResult {
 	start := time.Now()
 	if strings.TrimSpace(apiKey) == "" {
 		return netutil.TestResult{Message: "还没有填写 TMDB API Key"}
@@ -121,7 +139,7 @@ func TestConnection(ctx context.Context, apiKey string, proxy *config.ProxyConfi
 		return netutil.TestResult{Message: "代理配置有误", Detail: err.Error()}
 	}
 	params := url.Values{}
-	u := baseURL + "/configuration"
+	u := apiBase + "/configuration"
 	if !IsBearer(apiKey) {
 		params.Set("api_key", apiKey)
 		u += "?" + params.Encode()
@@ -392,7 +410,7 @@ const maxAttempts = 3
 const maxAPIResponseBytes = 2 << 20 // 2 MB
 
 func (c *Client) get(ctx context.Context, path string, params url.Values, out any) error {
-	u := baseURL + path
+	u := c.apiBase + path
 	if !c.bearer {
 		params.Set("api_key", c.apiKey)
 	}

@@ -63,6 +63,15 @@ export interface SEOState {
   site_name: string
 }
 
+/** 站点品牌：标题来自配置，logo 与图标是后台上传的同源素材地址 */
+export interface Branding {
+  site_name: string
+  logo_url: string
+  icon_url: string
+}
+
+export type BrandingKind = 'logo' | 'icon'
+
 export interface Settings {
   tmdb_configured: boolean
   telegram_configured: boolean
@@ -332,6 +341,18 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     }),
+
+  // 站点品牌：读取公开，上传与清除只对管理员开放
+  branding: () => request<Branding>('/branding'),
+  uploadBranding: (input: { logo?: File; icon?: File }) => {
+    const form = new FormData()
+    if (input.logo) form.append('logo', input.logo)
+    if (input.icon) form.append('icon', input.icon)
+    form.append('save_to_file', 'true')
+    return request<Branding>('/branding', { method: 'POST', body: form })
+  },
+  clearBranding: (kind: BrandingKind) =>
+    request<Branding>(`/branding?kind=${kind}&save_to_file=true`, { method: 'DELETE' }),
 
   // 登录与账号
   login: (username: string, password: string) =>

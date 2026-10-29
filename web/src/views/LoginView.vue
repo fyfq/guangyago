@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { Cloud, Loader2, AlertCircle } from 'lucide-vue-next'
 import Button from '../components/ui/Button.vue'
 import Input from '../components/ui/Input.vue'
 import { api } from '../lib/api'
+import { branding } from '../lib/branding'
 
 const username = ref('')
 const password = ref('')
@@ -33,8 +34,15 @@ async function submit() {
   }
 }
 
+function syncTitle() {
+  document.title = `登录 · ${branding.site_name}`
+}
+
+// 品牌信息是异步取的，到位后把标题跟着更新一次
+watch(() => branding.site_name, syncTitle)
+
 onMounted(async () => {
-  document.title = '登录 · 光鸭 GO'
+  syncTitle()
   // 检查是否已安装，未安装则跳转到安装页
   try {
     const status = await api.setupStatus()
@@ -59,10 +67,17 @@ onMounted(async () => {
   <div class="flex min-h-screen items-center justify-center px-6 py-10">
     <div class="w-full max-w-sm">
       <div class="mb-6 flex flex-col items-center text-center">
-        <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--color-brand)]">
+        <!-- branding.logo_url 已在 lib/branding 里限定成同源 /branding/ 路径 -->
+        <img
+          v-if="branding.logo_url"
+          :src="branding.logo_url"
+          :alt="branding.site_name"
+          class="h-11 w-11 rounded-xl object-contain"
+        />
+        <div v-else class="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--color-brand)]">
           <Cloud class="h-6 w-6 text-white" />
         </div>
-        <h1 class="mt-3 text-xl">光鸭 GO</h1>
+        <h1 class="mt-3 text-xl">{{ branding.site_name }}</h1>
         <p class="mt-1 text-[13px] text-[var(--color-muted)]">登录后台管理</p>
       </div>
 

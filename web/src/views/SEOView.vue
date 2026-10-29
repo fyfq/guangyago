@@ -10,11 +10,15 @@ import {
   Copy,
   Loader2,
   KeyRound,
+  Image as ImageIcon,
+  Upload,
+  Trash2,
 } from 'lucide-vue-next'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import Input from '../components/ui/Input.vue'
-import { api } from '../lib/api'
+import { api, type BrandingKind } from '../lib/api'
+import { applyBranding, branding, DEFAULT_SITE_NAME } from '../lib/branding'
 import { toast } from '../lib/toast'
 
 const loading = ref(true)
@@ -36,6 +40,12 @@ const savedBase = ref('')
 // 抓到的原始 HTML 里是否已带上验证标签
 const metaLive = ref(false)
 const metaMatched = ref(false)
+
+// 站点标识：标题走 settings，logo 与图标是上传到数据目录的素材
+const siteName = ref('')
+const savedSiteName = ref('')
+const savingName = ref(false)
+const busyKind = ref<BrandingKind | null>(null)
 
 const tokenFilled = computed(() => token.value.trim() !== '')
 const metaTag = computed(
@@ -60,8 +70,10 @@ async function loadSEOInfo() {
     const seo = settings.seo
     savedToken.value = seo?.google_verification || ''
     savedBase.value = seo?.base_url || ''
+    savedSiteName.value = seo?.site_name || ''
     token.value = savedToken.value
     fixedBase.value = savedBase.value
+    siteName.value = savedSiteName.value
 
     // sitemap 里的域名以服务端配置为准，否则展示的地址可能和实际提交的不一致
     const root = seo?.base_url || window.location.origin
@@ -132,6 +144,59 @@ async function saveSEO() {
   }
 }
 
+const siteNameDirty = computed(() => siteName.value.trim() !== savedSiteName.value)
+
+// 两类素材结构一样，用同一张卡片渲染，尺寸上限与后端 branding.go 保持一致
+const assets = computed(() => [
+  { kind: 'logo' as BrandingKind, label: 'Logo', hint: '显示在门户与后台头部；建议横向透明底，不超过 512KB', url: branding.logo_url },
+  { kind: 'icon' as BrandingKind, label: '站点图标', hint: '浏览器标签页上的小图标；建议 1:1 方图，不超过 256KB', url: branding.icon_url },
+])
+
+async function saveSiteName() {
+  const name = siteName.value.trim()
+  savingName.value = true
+  try {
+    await api.saveSettings({ seo: { site_name: name }, save_to_file: true })
+    savedSiteName.value = name
+    applyBranding(await api.branding())
+    toast.success('站点标题已保存')
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    savingName.value = false
+  }
+}
+
+// 上传与清除的回包里就是最新品牌信息，直接覆盖全站状态，不必刷新页面
+async function uploadAsset(kind: BrandingKind, event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  busyKind.value = kind
+  try {
+    applyBranding(await api.uploadBranding(kind === 'logo' ? { logo: file } : { icon: file }))
+    toast.success(kind === 'logo' ? 'Logo 已更新' : '站点图标已更新')
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '上传失败')
+  } finally {
+    // 清空 value，否则连续选同一个文件不会触发 change
+    input.value = ''
+    busyKind.value = null
+  }
+}
+
+async function clearAsset(kind: BrandingKind) {
+  busyKind.value = kind
+  try {
+    applyBranding(await api.clearBranding(kind))
+    toast.success(kind === 'logo' ? 'Logo 已清除' : '站点图标已清除')
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : '清除失败')
+  } finally {
+    busyKind.value = null
+  }
+}
+
 function copyToClipboard(text: string, label: string) {
   navigator.clipboard.writeText(text).then(() => {
     toast.success(`${label} 已复制`)
@@ -159,7 +224,7 @@ const searchEngines = [
 ]
 
 onMounted(() => {
-  document.title = 'SEO 设置 · 光鸭 GO'
+  document.title = `SEO 设置 · ${branding.site_name}`
   loadSEOInfo()
 })
 </script>
@@ -235,6 +300,77 @@ onMounted(() => {
             <span v-else-if="metaLive">首页有验证标签，但和这里填的验证码不一致</span>
             <span v-else>首页原始 HTML 还没带上标签，若刚保存过请稍等缓存刷新</span>
           </span>
+        </div>
+      </div>
+    </Card>
+
+    <Card>
+      <div class="mb-4 flex items-center gap-2">
+        <ImageIcon class="h-5 w-5 text-[var(--color-brand)]" />
+        <h3 class="text-base font-medium">站点标识</h3>
+      </div>
+      <p class="mb-4 text-sm text-[var(--color-muted)]">
+        站点标题会出现在页面头部、浏览器标签和首页原始 HTML 的 title / og 标签里；
+        Logo 与站点图标上传后保存在数据目录的 branding 子目录，只接受 PNG / JPEG / GIF / WebP（SVG 可内嵌脚本，不收录）。
+      </p>
+
+      <div class="space-y-4">
+        <div>
+          <label class="mb-1 block text-xs font-medium text-[var(--color-muted)]">站点标题</label>
+          <div class="flex gap-2">
+            <Input v-model="siteName" :placeholder="DEFAULT_SITE_NAME" />
+            <Button class="shrink-0" :disabled="savingName || !siteNameDirty" @click="saveSiteName">
+              <Loader2 v-if="savingName" class="mr-1 h-4 w-4 animate-spin" />
+              保存
+            </Button>
+          </div>
+          <p class="mt-1 text-xs text-[var(--color-faint)]">留空保存即回到默认的「{{ DEFAULT_SITE_NAME }}」。</p>
+        </div>
+
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div
+            v-for="a in assets"
+            :key="a.kind"
+            class="flex items-center gap-3 rounded-lg border border-[var(--color-line)] p-3"
+          >
+            <div
+              class="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--color-surface-sunken)]"
+            >
+              <!-- branding 里的地址已在 lib/branding 限定成同源 /branding/ 路径 -->
+              <img v-if="a.url" :src="a.url" :alt="a.label" class="h-full w-full object-contain" />
+              <ImageIcon v-else class="h-5 w-5 text-[var(--color-faint)]" />
+            </div>
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-medium">{{ a.label }}</p>
+              <p class="text-xs leading-relaxed text-[var(--color-muted)]">{{ a.hint }}</p>
+            </div>
+            <div class="flex shrink-0 items-center gap-1.5">
+              <label
+                class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-3 text-sm font-medium transition-colors hover:bg-[var(--color-surface-hover)]"
+              >
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  class="sr-only"
+                  :aria-label="`选择${a.label}文件`"
+                  @change="uploadAsset(a.kind, $event)"
+                />
+                <Loader2 v-if="busyKind === a.kind" class="h-4 w-4 animate-spin" />
+                <Upload v-else class="h-4 w-4" />
+                选择文件
+              </label>
+              <Button
+                v-if="a.url"
+                variant="ghost"
+                size="sm"
+                :disabled="busyKind === a.kind"
+                :aria-label="`清除${a.label}`"
+                @click="clearAsset(a.kind)"
+              >
+                <Trash2 class="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
     </Card>

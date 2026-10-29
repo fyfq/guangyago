@@ -16,11 +16,11 @@ import {
 import Button from '../components/ui/Button.vue'
 import Badge from '../components/ui/Badge.vue'
 import { api, mediaMeta, type PortalLink, type PortalStats } from '../lib/api'
+import { branding } from '../lib/branding'
 import { toast } from '../lib/toast'
 import { safeExternalUrl } from '../lib/utils'
 
 const PAGE = 24
-const SITE_NAME = '光鸭 GO'
 const items = ref<PortalLink[]>([])
 const total = ref(0)
 const stats = ref<PortalStats | null>(null)
@@ -73,13 +73,14 @@ function syncURL(push = false) {
 
 // 详情页标题与服务端注入保持一致（《片名》（年份） · 站名），SPA 内切换时前端补上
 function syncTitle() {
+  const site = branding.site_name
   const d = detail.value
   if (!d) {
-    document.title = '光鸭 GO · 资源库'
+    document.title = `${site} · 资源库`
     return
   }
   const name = d.title || '未命名资源'
-  document.title = d.year ? `${name}（${d.year}） · ${SITE_NAME}` : `${name} · ${SITE_NAME}`
+  document.title = d.year ? `${name}（${d.year}） · ${site}` : `${name} · ${site}`
 }
 
 function scheduleURL() {
@@ -247,6 +248,8 @@ watch(keyword, () => {
   scheduleURL()
 })
 watch([media, year, sort, detail], scheduleURL)
+// 品牌信息是异步取的，站点名到位后要把已经写好的标题跟新一次
+watch(() => branding.site_name, syncTitle)
 
 watch(detail, (d) => {
   document.body.style.overflow = d ? 'hidden' : ''
@@ -301,7 +304,7 @@ onMounted(async () => {
   applyURL()
   if (!deepLinked) {
     // 深链页的标题与单条标记来自服务端注入，列表页才由前端补齐
-    document.title = '光鸭 GO · 资源库'
+    syncTitle()
     injectSiteSchema()
   }
   window.addEventListener('popstate', onPopState)
@@ -326,11 +329,18 @@ onUnmounted(() => {
     <header class="border-b border-[var(--color-line)] bg-[var(--color-surface)]">
       <div class="mx-auto flex max-w-7xl items-center justify-between px-6 py-3.5">
         <div class="flex items-center gap-2.5">
-          <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-brand)]">
+          <!-- branding.logo_url 已在 lib/branding 里限定成同源 /branding/ 路径 -->
+          <img
+            v-if="branding.logo_url"
+            :src="branding.logo_url"
+            :alt="branding.site_name"
+            class="h-8 w-8 rounded-lg object-contain"
+          />
+          <div v-else class="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-brand)]">
             <Cloud class="h-4 w-4 text-white" />
           </div>
           <div>
-            <p class="text-[15px] font-medium leading-tight">光鸭 GO</p>
+            <p class="text-[15px] font-medium leading-tight">{{ branding.site_name }}</p>
             <p class="text-xs leading-tight text-[var(--color-muted)]">资源库</p>
           </div>
         </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, type Component } from 'vue'
+import { computed, onMounted, ref, watch, type Component } from 'vue'
 import {
   Cloud,
   Globe,
@@ -20,6 +20,7 @@ import SEOView from '../views/SEOView.vue'
 import Card from './ui/Card.vue'
 import Button from './ui/Button.vue'
 import { api, ApiError, type User } from '../lib/api'
+import { branding } from '../lib/branding'
 
 type Tab = 'import' | 'scrape' | 'library' | 'push' | 'settings' | 'users' | 'seo'
 
@@ -113,10 +114,17 @@ async function logout() {
   }
 }
 
+function syncTitle() {
+  document.title = `${branding.site_name} · 后台`
+}
+
 onMounted(() => {
-  document.title = '光鸭 GO · 后台'
+  syncTitle()
   checkAuth()
 })
+
+// 品牌信息异步到位后补一次标题
+watch(() => branding.site_name, syncTitle)
 </script>
 
 <template>
@@ -137,11 +145,18 @@ onMounted(() => {
       <div class="mx-auto max-w-7xl px-6 py-4">
         <div class="flex items-start justify-between gap-3">
           <div class="flex items-center gap-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-brand)]">
+            <!-- branding.logo_url 已在 lib/branding 里限定成同源 /branding/ 路径 -->
+            <img
+              v-if="branding.logo_url"
+              :src="branding.logo_url"
+              :alt="branding.site_name"
+              class="h-9 w-9 rounded-lg object-contain"
+            />
+            <div v-else class="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-brand)]">
               <Cloud class="h-5 w-5 text-white" />
             </div>
             <div>
-              <h1 class="text-[15px] font-medium">光鸭 GO</h1>
+              <h1 class="text-[15px] font-medium">{{ branding.site_name }}</h1>
               <p class="text-[13px] text-[var(--color-muted)]">后台 · 录入 → 刮削 → 推送频道</p>
             </div>
           </div>

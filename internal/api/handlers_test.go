@@ -334,6 +334,27 @@ func TestPortalAPI(t *testing.T) {
 	}
 	requireStatus(t, e.callAnon(http.MethodGet, "/api/portal/stats?media_type=bogus", nil), http.StatusBadRequest)
 
+	// 分类 / 年份 / 关键词筛选下的统计：这里曾因 CTE 缺列返回 500，前端把分类计数回落成 0
+	rec = e.callAnon(http.MethodGet, "/api/portal/stats?media_type=movie", nil)
+	requireStatus(t, rec, http.StatusOK)
+	decodeInto(t, rec, &stats)
+	if stats.Total != 2 || stats.Movies != 1 || stats.TV != 1 ||
+		len(stats.Years) != 1 || stats.Years[0].Year != 1972 || stats.Years[0].Count != 1 {
+		t.Errorf("按分类统计异常: %+v", stats)
+	}
+	rec = e.callAnon(http.MethodGet, "/api/portal/stats?year=1972", nil)
+	requireStatus(t, rec, http.StatusOK)
+	decodeInto(t, rec, &stats)
+	if stats.Total != 1 || stats.Movies != 1 || stats.TV != 0 || len(stats.Years) != 2 {
+		t.Errorf("按年份统计异常: %+v", stats)
+	}
+	rec = e.callAnon(http.MethodGet, "/api/portal/stats?q=%E6%95%99%E7%88%B6", nil)
+	requireStatus(t, rec, http.StatusOK)
+	decodeInto(t, rec, &stats)
+	if stats.Total != 1 {
+		t.Errorf("按关键词统计异常: %+v", stats)
+	}
+
 	rec = e.callAnon(http.MethodGet, "/api/portal/link/"+idPath(movie.ID), nil)
 	requireStatus(t, rec, http.StatusOK)
 	var item model.PublicLink

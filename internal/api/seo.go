@@ -228,8 +228,7 @@ var googleTokenRe = regexp.MustCompile(`^[A-Za-z0-9_-]{10,120}$`)
 // headTags 汇总需要注入首页原始 HTML 的标签。
 // 走原始 HTML 而不是前端脚本，是因为 CSP 禁内联脚本，爬虫也读不到 JS 补挂的标签。
 // ?id=<n> 时输出该资源自己的标题/描述/OG/JSON-LD，否则退回站点级。
-func (s *Server) headTags(c *gin.Context) string {
-	item := s.requestedPublicItem(c)
+func (s *Server) headTags(c *gin.Context, item *model.PublicLink) string {
 	parts := make([]string, 0, 4)
 	if tag := s.googleMetaTag(); tag != "" {
 		parts = append(parts, tag)
@@ -248,24 +247,31 @@ func (s *Server) headTags(c *gin.Context) string {
 	return strings.Join(parts, "\n    ")
 }
 
-// requestedPublicItem 取当前请求 ?id 对应的已推送资源；缺 id、id 非法或资源未收录时返回 nil。
-func (s *Server) requestedPublicItem(c *gin.Context) *model.PublicLink {
+// requestedItem 读取 ?id 对应的已收录资源。第二个返回值表示请求是否带了 id：
+// 带 id 却查不到要按 404 处理，不能让它以 200 返回被搜索引擎当作有效页面收录。
+func (s *Server) requestedItem(c *gin.Context) (*model.PublicLink, bool) {
 	raw := strings.TrimSpace(c.Query("id"))
 	if raw == "" {
-		return nil
+		return nil, false
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || id <= 0 {
-		return nil
+		return nil, true
 	}
 	item, err := s.store.GetPublic(id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return nil, true
 	}
 	if err != nil {
 		slog.Warn("读取单条资源失败", "id", raw, "err", err)
-		return nil
+		return nil, false
 	}
+	return item, true
+}
+
+// requestedPublicItem 取当前请求 ?id 对应的已推送资源；缺 id、id 非法或资源未收录时返回 nil。
+func (s *Server) requestedPublicItem(c *gin.Context) *model.PublicLink {
+	item, _ := s.requestedItem(c)
 	return item
 }
 
@@ -288,10 +294,14 @@ func itemHeadTags(item *model.PublicLink, siteName, baseURL string) string {
 	desc := itemDescription(item, label)
 
 	pageURL := fmt.Sprintf("%s/?id=%d", baseURL, item.ID)
+	ogType := "video.movie"
+	if item.MediaType == model.MediaTV {
+		ogType = "video.tv_show"
+	}
 	out := []string{
 		"<title>" + htmlEscape(seoTitle) + "</title>",
 		`<meta name="description" content="` + htmlEscape(desc) + `" />`,
-		`<meta property="og:type" content="video.movie" />`,
+		`<meta property="og:type" content="` + ogType + `" />`,
 		`<meta property="og:url" content="` + htmlEscape(pageURL) + `" />`,
 		`<meta property="og:title" content="` + htmlEscape(headTitle) + `" />`,
 		`<meta property="og:description" content="` + htmlEscape(desc) + `" />`,
@@ -424,16 +434,19 @@ func injectHeadTags(indexHTML, tags string) string {
 	if tags == "" {
 		return indexHTML
 	}
-	idx := strings.Index(indexHTML, "</head>")
-	if idx < 0 {
-		return indexHTML
-	}
 	if strings.Contains(tags, "<title>") {
 		if open, lo := strings.Index(indexHTML, "<title>"), strings.Index(indexHTML, "</title>"); open >= 0 && lo > open {
 			indexHTML = indexHTML[:open] + indexHTML[lo+len("</title>"):]
 		}
 		indexHTML = siteMetaRe.ReplaceAllString(indexHTML, "")
-		idx = strings.Index(indexHTML, "</head>")
+	}
+	// 模板里的 robots=index,follow 与 404 页的 noindex 只能留一个，否则爬虫取哪条不确定
+	if strings.Contains(tags, `<meta name="robots"`) {
+		indexHTML = robotsMetaRe.ReplaceAllString(indexHTML, "")
+	}
+	idx := strings.Index(indexHTML, "</head>")
+	if idx < 0 {
+		return indexHTML
 	}
 	return indexHTML[:idx] + "    " + tags + "\n  " + indexHTML[idx:]
 }
@@ -441,18 +454,52 @@ func injectHeadTags(indexHTML, tags string) string {
 // siteMetaRe 匹配模板里的站点级 description / og: / twitter: 标签。
 var siteMetaRe = regexp.MustCompile(`[ \t]*<meta\s+(?:property="og:[a-zA-Z_:-]*"|name="twitter:[a-zA-Z_:-]*"|name="description")\s+content="[^"]*"\s*/>\n?`)
 
+// robotsMetaRe 匹配模板里的 robots 标签，404 页注入 noindex 前先删掉。
+var robotsMetaRe = regexp.MustCompile(`[ \t]*<meta\s+name="robots"\s+content="[^"]*"\s*/>\n?`)
+
 // WriteIndex 返回托管的前端首页，并把验证标签注入原始 HTML。
 // 走这里而不是直接透传静态文件，是因为爬虫读不到前端 JS 补挂的 meta 标签，
 // 站点名也要在服务端把模板占位符换成配置值。
+// 带 ?id 但资源不存在时直接按 404 输出，避免软 404 被收录。
 func (s *Server) WriteIndex(c *gin.Context, fsys fs.FS) {
+	item, hasID := s.requestedItem(c)
+	if hasID && item == nil {
+		s.WriteNotFound(c, fsys)
+		return
+	}
+	s.writeSPAIndex(c, fsys, http.StatusOK, s.headTags(c, item))
+}
+
+// WriteNotFound 以 404 状态返回前端入口，让 SPA 能渲染自己的提示页；
+// 同时打上 noindex，搜索引擎不会把不存在的路径当成有效页面。
+func (s *Server) WriteNotFound(c *gin.Context, fsys fs.FS) {
+	c.Header("X-Robots-Tag", "noindex")
+	s.writeSPAIndex(c, fsys, http.StatusNotFound, `<meta name="robots" content="noindex" />`)
+}
+
+func (s *Server) writeSPAIndex(c *gin.Context, fsys fs.FS, status int, tags string) {
 	body, err := fs.ReadFile(fsys, "index.html")
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "首页不可用"})
 		return
 	}
-	doc := injectHeadTags(string(body), s.headTags(c))
+	doc := injectHeadTags(string(body), tags)
 	c.Header("Cache-Control", "no-cache")
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(s.applySiteName(doc)))
+	c.Data(status, "text/html; charset=utf-8", []byte(s.applySiteName(doc)))
+}
+
+// SPAIndexPath 判断未知路径是否仍属于前端入口：门户首页、登录、安装向导与后台。
+// 其余路径一律 404，否则任意拼错的 URL 都会返回 200，形成软 404。
+func SPAIndexPath(p string) bool {
+	p = strings.TrimRight(p, "/")
+	if p == "" {
+		return true
+	}
+	switch p {
+	case "/admin", "/login", "/setup":
+		return true
+	}
+	return strings.HasPrefix(p, "/admin/")
 }
 
 // canonicalTag 按当前请求的完整 URL 生成 <link rel="canonical">，
@@ -555,8 +602,11 @@ func buildMovieSchema(item *model.PublicLink, baseURL string) map[string]any {
 		"url":      fmt.Sprintf("%s/?id=%d", baseURL, item.ID),
 	}
 
-	if date := schemaDate(item.SharedAt); date != "" {
+	if date := schemaDate(item.ReleaseDate); date != "" {
 		data["datePublished"] = date
+	} else if item.Year > 0 {
+		// 存量记录只有年份时退到当年 1 月 1 日，至少给出可信的年份信号
+		data["datePublished"] = fmt.Sprintf("%d-01-01", item.Year)
 	}
 	if item.OriginalTitle != "" && item.OriginalTitle != item.Title {
 		data["alternateName"] = item.OriginalTitle
@@ -581,11 +631,7 @@ func buildMovieSchema(item *model.PublicLink, baseURL string) map[string]any {
 	if item.Runtime > 0 {
 		data["duration"] = fmt.Sprintf("PT%dM", item.Runtime)
 	}
-	if item.Genres != "" {
-		genres := strings.Split(item.Genres, ",")
-		for i, g := range genres {
-			genres[i] = strings.TrimSpace(g)
-		}
+	if genres := splitGenres(item.Genres); len(genres) > 0 {
 		data["genre"] = genres
 	}
 	if item.TMDBID > 0 {
@@ -593,4 +639,18 @@ func buildMovieSchema(item *model.PublicLink, baseURL string) map[string]any {
 	}
 
 	return data
+}
+
+// splitGenres 拆开类型串：TMDB 刮削写入的是 " / "，CSV 导入可能是半角或全角逗号。
+func splitGenres(raw string) []string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '，' || r == '/'
+	})
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if g := strings.TrimSpace(p); g != "" {
+			out = append(out, g)
+		}
+	}
+	return out
 }

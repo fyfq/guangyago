@@ -15,7 +15,7 @@ const publicWhere = `status IN ('scraped', 'pushed', 'push_failed')`
 const defaultSitemapLimit = 5000
 
 const publicColumns = `id, title, original_title, year, media_type, tmdb_id, overview, genres,
-vote_average, runtime, poster_url, url, code, shared_at`
+vote_average, runtime, poster_url, url, code, shared_at, release_date`
 
 // publicGroupExpr 把同一个 TMDB 条目折叠成门户里的一条资源：同一部片允许多条分享链接。
 // TMDB ID 只在同类型内唯一，所以分组键必须带上 media_type；未刮削出 TMDB ID 的记录按自身 ID 独立成组。
@@ -74,7 +74,7 @@ func (s *Store) ListPublic(f model.PublicFilter) ([]model.PublicLink, int, error
 			JOIN (SELECT grp, COUNT(*) AS link_count FROM pub GROUP BY grp) c ON c.grp = f.grp
 		)
 		SELECT id, title, original_title, year, media_type, tmdb_id, overview, genres,
-		       vote_average, runtime, poster_url, url, code, shared_at, link_count, grp
+		       vote_average, runtime, poster_url, url, code, shared_at, release_date, link_count, grp
 		FROM ranked WHERE rn = 1
 		ORDER BY `+order+` LIMIT ? OFFSET ?`, // #nosec G202
 		append(args, limit, offset)...)
@@ -91,7 +91,7 @@ func (s *Store) ListPublic(f model.PublicFilter) ([]model.PublicLink, int, error
 		if err := rows.Scan(
 			&p.ID, &p.Title, &p.OriginalTitle, &p.Year, &p.MediaType, &p.TMDBID,
 			&p.Overview, &p.Genres, &p.VoteAverage, &p.Runtime, &p.PosterURL,
-			&p.URL, &p.Code, &p.SharedAt, &p.LinkCount, &grp,
+			&p.URL, &p.Code, &p.SharedAt, &p.ReleaseDate, &p.LinkCount, &grp,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -192,9 +192,12 @@ func (s *Store) PublicStats(f model.PublicFilter) (model.PublicStats, error) {
 	var out model.PublicStats
 
 	filter, args := publicFilterClause(f, false, true)
+	// CTE 必须带上筛选条件引用的全部列：带 media_type 或关键词时，
+	// 只 select 部分列的 CTE 会让 WHERE 里的列名解析失败，整个统计接口 500。
 	if err := s.db.QueryRow(
 		`WITH pub AS (
-			SELECT media_type, `+publicGroupExpr+` AS grp FROM links WHERE `+publicWhere+`
+			SELECT media_type, year, title, original_title, genres, `+publicGroupExpr+` AS grp
+			FROM links WHERE `+publicWhere+`
 		)
 		SELECT COUNT(DISTINCT grp),
 		       COUNT(DISTINCT CASE WHEN media_type = 'movie' THEN grp END),
@@ -212,7 +215,8 @@ func (s *Store) PublicStats(f model.PublicFilter) (model.PublicStats, error) {
 	filter, args = publicFilterClause(f, true, false)
 	rows, err := s.db.Query(
 		`WITH pub AS (
-			SELECT year, `+publicGroupExpr+` AS grp FROM links WHERE `+publicWhere+` AND year > 0
+			SELECT year, media_type, title, original_title, genres, `+publicGroupExpr+` AS grp
+			FROM links WHERE `+publicWhere+` AND year > 0
 		)
 		SELECT year, COUNT(DISTINCT grp) FROM pub WHERE 1=1`+filter+`
 		GROUP BY year ORDER BY year DESC`, // #nosec G202 -- 表达式为本文件常量，值走占位符
@@ -253,7 +257,7 @@ func (s *Store) GetPublic(id int64) (*model.PublicLink, error) {
 	).Scan(
 		&p.ID, &p.Title, &p.OriginalTitle, &p.Year, &p.MediaType, &p.TMDBID,
 		&p.Overview, &p.Genres, &p.VoteAverage, &p.Runtime, &p.PosterURL,
-		&p.URL, &p.Code, &p.SharedAt, &p.LinkCount,
+		&p.URL, &p.Code, &p.SharedAt, &p.ReleaseDate, &p.LinkCount,
 	)
 	if err != nil {
 		return nil, err

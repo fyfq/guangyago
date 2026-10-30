@@ -450,6 +450,10 @@ func TestPublicQueries(t *testing.T) {
 	mk("p2", "剧集B", 2021, model.MediaTV, 9.0, true, "2026-02-01", 102)
 	mk("p3", "电影C", 2020, model.MediaMovie, 5.0, true, "", 103)
 	p4 := mk("p4", "待推送D", 2022, model.MediaMovie, 8.0, false, "2026-03-01", 104)
+	// release_date 要投影到门户字段，SEO 的 datePublished 依赖它
+	if _, err := s.db.Exec(`UPDATE links SET release_date='2022-05-01' WHERE id=?`, p4.ID); err != nil {
+		t.Fatal(err)
+	}
 	// 脏数据：javascript: 链接必须被过滤为空
 	bad := mk("p5", "脏链接E", 2019, model.MediaMovie, 6.0, true, "2026-04-01", 105)
 	if _, err := s.db.Exec(`UPDATE links SET url='javascript:alert(1)' WHERE id=?`, bad.ID); err != nil {
@@ -488,6 +492,9 @@ func TestPublicQueries(t *testing.T) {
 		}
 		if it.ID == bad.ID && it.URL != "" {
 			t.Errorf("javascript: 链接未被过滤: %q", it.URL)
+		}
+		if it.ID == p4.ID && it.ReleaseDate != "2022-05-01" {
+			t.Errorf("门户字段应带出 release_date，实际 %q", it.ReleaseDate)
 		}
 	}
 	if merged != 1 {
@@ -561,6 +568,46 @@ func TestPublicQueries(t *testing.T) {
 		}
 	}
 
+	// 带筛选的统计：分类数忽略分类本身、年份选项忽略年份本身，
+	// 且筛选引用的列必须在 CTE 里，否则整个统计接口会 500、前端计数回落成 0。
+	st, err = s.PublicStats(model.PublicFilter{MediaType: model.MediaMovie})
+	if err != nil {
+		t.Fatalf("按分类统计: %v", err)
+	}
+	if st.Total != 5 || st.Movies != 4 || st.TV != 1 {
+		t.Errorf("分类统计的分类数应忽略分类本身: %+v", st)
+	}
+	if len(st.Years) != 3 || st.Years[0].Year != 2022 {
+		t.Errorf("分类下的年份选项应只含电影年份并按年份倒序: %+v", st.Years)
+	}
+	year2020 := 0
+	for _, y := range st.Years {
+		if y.Year == 2020 {
+			year2020 = y.Count
+		}
+	}
+	if year2020 != 2 {
+		t.Errorf("电影 2020 年应计 2 组，实际 %d: %+v", year2020, st.Years)
+	}
+	st, err = s.PublicStats(model.PublicFilter{Year: 2020})
+	if err != nil {
+		t.Fatalf("按年份统计: %v", err)
+	}
+	if st.Total != 2 || st.Movies != 2 || st.TV != 0 {
+		t.Errorf("年份筛选后分类数异常: %+v", st)
+	}
+	if len(st.Years) != 4 {
+		t.Errorf("年份选项应忽略年份本身，实际 %+v", st.Years)
+	}
+	st, err = s.PublicStats(model.PublicFilter{Keyword: "电影A"})
+	if err != nil || st.Total != 1 || len(st.Years) != 1 || st.Years[0].Count != 1 {
+		t.Errorf("关键词统计异常: %+v err=%v", st, err)
+	}
+	st, err = s.PublicStats(model.PublicFilter{MediaType: model.MediaTV, Year: 2020})
+	if err != nil || st.Total != 2 || st.TV != 0 || len(st.Years) != 1 || st.Years[0].Year != 2021 {
+		t.Errorf("分类+年份统计异常: %+v err=%v", st, err)
+	}
+
 	// 站点地图与列表共用分组口径：同 TMDB 只出现一次，最近分享的链接排最前
 	sm, err := s.Sitemap(0, 10)
 	if err != nil {
@@ -588,6 +635,8 @@ func TestPublicQueries(t *testing.T) {
 	}
 	if p, err := s.GetPublic(p4.ID); err != nil || p == nil {
 		t.Errorf("待推送记录应可读: %+v err=%v", p, err)
+	} else if p.ReleaseDate != "2022-05-01" {
+		t.Errorf("GetPublic 应带出 release_date，实际 %q", p.ReleaseDate)
 	}
 	if p, err := s.GetPublic(pending.ID); err == nil || p != nil {
 		t.Errorf("未刮削记录应返回错误，实际 %+v err=%v", p, err)

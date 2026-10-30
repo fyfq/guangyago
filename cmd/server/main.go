@@ -211,6 +211,11 @@ func main() {
 			}
 			// 找不到对应静态文件时回落到首页，交给前端路由；
 			// 首页走 WriteIndex 是为了把站长验证 meta 注入原始 HTML。
+			// 只有前端入口页面回落到首页，其余未知路径按 404 处理。
+			if !api.SPAIndexPath(c.Request.URL.Path) {
+				srv.WriteNotFound(c, fsys)
+				return
+			}
 			srv.WriteIndex(c, fsys)
 		})
 	}

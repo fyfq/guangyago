@@ -74,13 +74,13 @@ func testIndexFS(head string) fstest.MapFS {
 	}
 }
 
-func writeIndex(s *Server, target, head string) string {
+func writeIndex(s *Server, target, head string) (string, int) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, target, nil)
 	c.Request.Host = "gy.example.com"
 	s.WriteIndex(c, testIndexFS(head))
-	return rec.Body.String()
+	return rec.Body.String(), rec.Code
 }
 
 func TestItemHeadTags_Movie(t *testing.T) {
@@ -194,7 +194,10 @@ func TestWriteIndexInjectsItemMeta(t *testing.T) {
 	s, st := newSEOServer(t)
 	id := seedPushedLink(t, st, &model.Link{Title: "教父", Year: 1972, MediaType: model.MediaMovie, Overview: "科莱昂家族"})
 	head := "<title>光鸭 GO - 网盘资源分享平台</title>"
-	body := writeIndex(s, "/?id="+itoa(id), head)
+	body, status := writeIndex(s, "/?id="+itoa(id), head)
+	if status != http.StatusOK {
+		t.Errorf("已收录资源的深链应返回 200，实际 %d", status)
+	}
 
 	for _, want := range []string{
 		"<title>教父（1972） - 光鸭云盘网盘分享 | 光鸭 GO</title>",
@@ -219,7 +222,10 @@ func TestWriteIndexInjectsItemMeta(t *testing.T) {
 func TestWriteIndexListKeepsSiteTitle(t *testing.T) {
 	s, _ := newSEOServer(t)
 	head := "<title>光鸭 GO - 网盘资源分享平台</title>"
-	body := writeIndex(s, "/", head)
+	body, status := writeIndex(s, "/", head)
+	if status != http.StatusOK {
+		t.Errorf("列表页应返回 200，实际 %d", status)
+	}
 	if !strings.Contains(body, head) {
 		t.Errorf("列表页应保留站点标题: %s", body)
 	}
@@ -228,12 +234,31 @@ func TestWriteIndexListKeepsSiteTitle(t *testing.T) {
 	}
 }
 
-func TestWriteIndexUnknownIDFallsBackToSite(t *testing.T) {
+func TestWriteIndexUnknownIDReturns404(t *testing.T) {
 	s, _ := newSEOServer(t)
-	head := "<title>光鸭 GO - 网盘资源分享平台</title>"
-	body := writeIndex(s, "/?id=99999", head)
-	if !strings.Contains(body, head) {
-		t.Errorf("不存在的 id 应退回站点级标签: %s", body)
+	head := "<title>光鸭 GO - 网盘资源分享平台</title>" +
+		`<meta name="robots" content="index, follow" />`
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/?id=99999", nil)
+	c.Request.Host = "gy.example.com"
+	s.WriteIndex(c, testIndexFS(head))
+
+	body := rec.Body.String()
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("不存在的 id 应返回 404，实际 %d", rec.Code)
+	}
+	if !strings.Contains(body, `<meta name="robots" content="noindex" />`) {
+		t.Errorf("404 页应注入 noindex: %s", body)
+	}
+	if n := strings.Count(body, `name="robots"`); n != 1 {
+		t.Errorf("robots 标签应唯一，实际 %d 个: %s", n, body)
+	}
+	if rec.Header().Get("X-Robots-Tag") != "noindex" {
+		t.Errorf("404 响应头应带 X-Robots-Tag: noindex，实际 %q", rec.Header().Get("X-Robots-Tag"))
+	}
+	if strings.Contains(body, `rel="canonical"`) {
+		t.Errorf("404 页不应输出 canonical: %s", body)
 	}
 }
 
@@ -285,17 +310,85 @@ func TestSchemaDate(t *testing.T) {
 }
 
 func TestBuildMovieSchema_DatePublished(t *testing.T) {
-	item := &model.PublicLink{ID: 5, Title: "猎户座", MediaType: model.MediaMovie, SharedAt: "2026-10-27 16:37:34", TMDBID: 42}
+	item := &model.PublicLink{
+		ID: 5, Title: "猎户座", MediaType: model.MediaMovie,
+		ReleaseDate: "2019-07-12", SharedAt: "2026-10-27 16:37:34", TMDBID: 42,
+	}
 	got := buildMovieSchema(item, "https://gy.example.com")
-	if got["datePublished"] != "2026-10-27" {
-		t.Errorf("datePublished 应为 ISO 日期，实际 %v", got["datePublished"])
+	if got["datePublished"] != "2019-07-12" {
+		t.Errorf("datePublished 应取上映日期，实际 %v", got["datePublished"])
 	}
 	if got["sameAs"] != "https://www.themoviedb.org/movie/42" {
 		t.Errorf("sameAs 异常: %v", got["sameAs"])
 	}
+	// 只有年份的存量记录退到当年 1 月 1 日
+	yearOnly := buildMovieSchema(&model.PublicLink{ID: 7, Title: "只有年份", Year: 1999}, "https://gy.example.com")
+	if yearOnly["datePublished"] != "1999-01-01" {
+		t.Errorf("缺上映日期时应按年份回退，实际 %v", yearOnly["datePublished"])
+	}
 	noDate := buildMovieSchema(&model.PublicLink{ID: 6, Title: "无日期"}, "https://gy.example.com")
 	if _, ok := noDate["datePublished"]; ok {
-		t.Error("空 shared_at 不应输出 datePublished")
+		t.Error("既无上映日期也无年份时不应输出 datePublished")
+	}
+}
+
+func TestBuildMovieSchema_SplitsGenres(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want []string
+	}{
+		{"动作 / 动画 / 冒险", []string{"动作", "动画", "冒险"}},
+		{"剧情,犯罪", []string{"剧情", "犯罪"}},
+		{"科幻，悬疑", []string{"科幻", "悬疑"}},
+	}
+	for _, c := range cases {
+		got := buildMovieSchema(&model.PublicLink{ID: 1, Title: "片", Genres: c.raw}, "https://gy.example.com")
+		genres, ok := got["genre"].([]string)
+		if !ok || len(genres) != len(c.want) {
+			t.Fatalf("genre(%q) 拆分异常: %#v", c.raw, got["genre"])
+		}
+		for i := range c.want {
+			if genres[i] != c.want[i] {
+				t.Errorf("genre(%q)[%d] = %q，期望 %q", c.raw, i, genres[i], c.want[i])
+			}
+		}
+	}
+	empty := buildMovieSchema(&model.PublicLink{ID: 2, Title: "片", Genres: " / , "}, "https://gy.example.com")
+	if _, ok := empty["genre"]; ok {
+		t.Errorf("只有分隔符时不应输出 genre: %v", empty["genre"])
+	}
+}
+
+func TestItemHeadTags_OGTypeFollowsMediaType(t *testing.T) {
+	movie := itemHeadTags(&model.PublicLink{ID: 1, Title: "电影"}, "光鸭 GO", "https://gy.example.com")
+	if !strings.Contains(movie, `<meta property="og:type" content="video.movie" />`) {
+		t.Errorf("电影 og:type 错误: %s", movie)
+	}
+	tv := itemHeadTags(&model.PublicLink{ID: 2, Title: "剧集", MediaType: model.MediaTV}, "光鸭 GO", "https://gy.example.com")
+	if !strings.Contains(tv, `<meta property="og:type" content="video.tv_show" />`) {
+		t.Errorf("剧集 og:type 应为 video.tv_show: %s", tv)
+	}
+}
+
+func TestSPAIndexPath(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/", true},
+		{"", true},
+		{"/login", true},
+		{"/setup", true},
+		{"/admin", true},
+		{"/admin/", true},
+		{"/admin/links", true},
+		{"/nonexistent", false},
+		{"/adminx", false},
+	}
+	for _, c := range cases {
+		if got := SPAIndexPath(c.path); got != c.want {
+			t.Errorf("SPAIndexPath(%q)=%v 期望 %v", c.path, got, c.want)
+		}
 	}
 }
 
@@ -335,7 +428,10 @@ func TestWriteIndex_ItemPageHasSingleOGTitle(t *testing.T) {
 	head := `<title>光鸭 GO - 网盘资源分享平台</title>` + "\n    " +
 		`<meta property="og:type" content="website" />` + "\n    " +
 		`<meta property="og:title" content="光鸭 GO - 网盘资源分享平台" />`
-	body := writeIndex(s, "/?id="+itoa(id), head)
+	body, status := writeIndex(s, "/?id="+itoa(id), head)
+	if status != http.StatusOK {
+		t.Errorf("已收录资源的深链应返回 200，实际 %d", status)
+	}
 	if n := strings.Count(body, `property="og:title"`); n != 1 {
 		t.Errorf("og:title 应唯一，实际 %d 个:\n%s", n, body)
 	}

@@ -189,7 +189,7 @@ XML（`Content-Type: application/xml`，`Cache-Control: public, max-age=3600`）
 }
 ```
 
-> 可选字段按数据有无出现：`alternateName` 仅在原名与片名不同时；`description` / `image` / `year` / `aggregateRating` / `duration` / `genre` / `sameAs` 在对应值 >0 或非空时才输出。`datePublished` 由 `shared_at` 归一成 ISO 日期（`2006-01-02`），`shared_at` 为空时整个字段省略。
+> 可选字段按数据有无出现：`alternateName` 仅在原名与片名不同时；`description` / `image` / `year` / `aggregateRating` / `duration` / `genre` / `sameAs` 在对应值 >0 或非空时才输出。`genre` 会按 ` / `、半角逗号、全角逗号拆成数组。`datePublished` 取上映日期 `release_date` 并归一成 ISO 日期（`2006-01-02`）；只有年份时回退为 `<year>-01-01`，两者都没有时整个字段省略。
 
 ### `GET /?id=<n>`（门户深链）
 首页 HTML 由服务端渲染，`?id=` 命中已收录记录（刮削成功，含待推送与推送失败）时，`</head>` 前注入该资源自己的标签，并删除模板里的站点级 `title` / `description` / `og:` / `twitter:`，保证同名标签全局唯一：
@@ -204,6 +204,8 @@ XML（`Content-Type: application/xml`，`Cache-Control: public, max-age=3600`）
 <meta name="twitter:card" content="summary_large_image" />
 <script id="structured-data" data-item-id="42" type="application/ld+json">{ "@type": "Movie", … }</script>
 ```
+
+`og:type` 跟随类型：电影 `video.movie`，剧集 `video.tv_show`。`?id=` 指向不存在或未收录的资源时返回 `404`，响应带 `X-Robots-Tag: noindex` 且不输出 `canonical`；其它未知路径（`/login`、`/setup`、`/admin*` 除外）同样返回 `404`，避免软 404 被收录。
 
 - `id` 缺失、非法或记录还没刮削成功时，退回站点级标签，页面仍是可用的列表页。
 - 同一 TMDB 的多条分享在详情里合并展示，组内任意一条分享的 `id` 都会渲染同一部资源。

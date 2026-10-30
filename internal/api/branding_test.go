@@ -273,7 +273,7 @@ func TestWriteIndex_SiteNameAndIcon(t *testing.T) {
 	if code, body := e.upload(t, map[string][]byte{"icon": brandingPNG}, false); code != http.StatusOK {
 		t.Fatalf("上传应成功，实际 %d: %s", code, body)
 	}
-	doc := writeIndex(e.s, "/", `<title>{{SITE_NAME}} - 网盘资源分享平台</title>`)
+	doc, _ := writeIndex(e.s, "/", `<title>{{SITE_NAME}} - 网盘资源分享平台</title>`)
 	if !strings.Contains(doc, "<title>测试站 - 网盘资源分享平台</title>") {
 		t.Errorf("站点名未替换: %s", doc)
 	}
@@ -288,7 +288,7 @@ func TestWriteIndex_SiteNameAndIcon(t *testing.T) {
 func TestWriteIndex_EscapesSiteName(t *testing.T) {
 	e := newBrandingEnv(t)
 	e.s.cfg.SEO.SiteName = `x"><script>alert(1)</script>`
-	doc := writeIndex(e.s, "/", `<title>{{SITE_NAME}}</title>`)
+	doc, _ := writeIndex(e.s, "/", `<title>{{SITE_NAME}}</title>`)
 	if strings.Contains(doc, "<script>alert(1)</script>") {
 		t.Errorf("站点名未转义，可注入标签: %s", doc)
 	}

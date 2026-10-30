@@ -39,6 +39,7 @@ type PublicLink struct {
 	URL           string        `json:"url"`
 	Code          string        `json:"code"`
 	SharedAt      string        `json:"shared_at"`
+	ReleaseDate   string        `json:"release_date,omitempty"`
 	LinkCount     int           `json:"link_count"`
 	Links         []PublicShare `json:"links,omitempty"`
 }

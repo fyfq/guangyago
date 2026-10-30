@@ -35,7 +35,7 @@
 5. `ensureAdmin`：仅当用户表为空且设置了 `ADMIN_PASSWORD` 时创建初始管理员；否则只在日志提示走安装向导（`/setup`）。
 6. `build(cfg)`：按配置构造 scraper / notifier，首次创建 pipeline 并 `Start(workers)`，按需启动 Bot。这个闭包同时是配置热更新回调。
 7. gin：`ReleaseMode`、`SetTrustedProxies(nil)`（**故意不信任 `X-Forwarded-For`**，登录锁定按真实 TCP 地址统计）、中间件 `requestLog / Recovery / securityHeaders / limitBody`，`Register` 里再加全局 `requireSameOrigin`。`requestLog` 取代了 `gin.Logger()`：按状态码与耗时分级（5xx→Error、4xx 或超过 1 秒→Warn），`/api/health`、`/api/tasks`、`/favicon.ico`、`/robots.txt` 与 `/assets/*` 降到 Debug，免得轮询和静态资源把关键事件淹掉。
-8. `NoRoute`：`/api/*` 回 404 JSON；命中静态文件直接 `FileFromFS`；其余一律 `srv.WriteIndex` 回落首页（为了注入 SEO 标签，见 §8）。
+8. `NoRoute`：`/api/*` 回 404 JSON；命中静态文件直接 `FileFromFS`；前端入口（`/`、`/login`、`/setup`、`/admin*`）走 `srv.WriteIndex` 回落首页（为了注入 SEO 标签，见 §8），其余未知路径走 `srv.WriteNotFound` 返回 404 + `noindex`，不做软 404。
 9. 收 SIGINT/SIGTERM：`pipe.Stop()` → 5 秒超时的 `http.Server.Shutdown`；`main` 退出时 `defer` 关闭日志文件。
 
 ## 3. 包职责

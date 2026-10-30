@@ -35,6 +35,9 @@ const loading = ref(false)
 const loadingMore = ref(false)
 const error = ref('')
 const detail = ref<PortalLink | null>(null)
+// 详情弹层的焦点管理：打开时移入弹层，关闭时还原到触发元素
+const detailPanel = ref<HTMLElement | null>(null)
+let lastFocused: HTMLElement | null = null
 // 同一个 TMDB 的多条分享在服务端已合并，详情直接列出全部链接
 const detailShares = computed<PortalShare[]>(() => detail.value?.links ?? [])
 const overviewExpanded = ref(false)
@@ -125,7 +128,8 @@ async function openDeepLink(id: number) {
   try {
     detail.value = await api.portalLink(id)
   } catch {
-    // 深链指向未收录或已下架的资源，退回列表页
+    // 深链指向未收录或已下架的资源，提示后退回列表页
+    toast.error('该资源不存在或已下架')
     syncURL()
   }
 }
@@ -267,7 +271,37 @@ async function copyShare(s: PortalShare) {
 }
 
 function onKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') closeDetail()
+  if (e.key === 'Escape') {
+    closeDetail()
+    return
+  }
+  if (e.key !== 'Tab' || !detail.value) return
+  const panel = detailPanel.value
+  if (!panel) return
+  // aria-modal 只描述语义，实际焦点仍会跑到背后的页面，这里手动圈住
+  const focusables = Array.from(
+    panel.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((el) => el.offsetParent !== null)
+  const first = focusables[0]
+  const last = focusables[focusables.length - 1]
+  if (!first || !last) {
+    e.preventDefault()
+    panel.focus()
+    return
+  }
+  const active = document.activeElement
+  if (!panel.contains(active)) {
+    e.preventDefault()
+    first.focus()
+  } else if (e.shiftKey && active === first) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault()
+    first.focus()
+  }
 }
 
 watch(keyword, () => {
@@ -283,8 +317,15 @@ watch(detail, scheduleURL)
 // 品牌信息是异步取的，站点名到位后要把已经写好的标题跟新一次
 watch(() => branding.site_name, syncTitle)
 
-watch(detail, (d) => {
+watch(detail, (d, prev) => {
   document.body.style.overflow = d ? 'hidden' : ''
+  if (d && !prev) {
+    lastFocused = document.activeElement as HTMLElement | null
+    nextTick(() => detailPanel.value?.focus())
+  } else if (!d && prev) {
+    lastFocused?.focus()
+    lastFocused = null
+  }
   const existing = document.getElementById('structured-data')
   // 深链进来的那条资源，服务端已经把 JSON-LD 写进原始 HTML，不必再取一次
   if (d && existing?.dataset.itemId === String(d.id)) return
@@ -608,7 +649,9 @@ onUnmounted(() => {
       @click.self="closeDetail"
     >
       <div
-        class="relative max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-[var(--radius-card)] bg-[var(--color-surface)] p-5 shadow-xl"
+        ref="detailPanel"
+        tabindex="-1"
+        class="relative max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-[var(--radius-card)] bg-[var(--color-surface)] p-5 shadow-xl focus:outline-none"
         role="dialog"
         aria-modal="true"
         :aria-label="detail.title"

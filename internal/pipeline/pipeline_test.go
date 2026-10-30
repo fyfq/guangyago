@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/odin/guangya-go/internal/config"
 	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/guangya-go/internal/notifier"
 	"github.com/odin/guangya-go/internal/scraper"
 	"github.com/odin/guangya-go/internal/store"
 )
@@ -375,5 +377,204 @@ func TestScrape_ReviewWithTMDBIDStaysReviewed(t *testing.T) {
 	}
 	if got.Status != model.StatusReview {
 		t.Errorf("未确认的 ID 重刮后仍应待核实，实际 %s", got.Status)
+	}
+}
+
+// fakeTelegramServer 是离线 Bot API：构造时的 getMe 与推送的 sendMessage/sendPhoto 都返回成功。
+func fakeTelegramServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getMe"):
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"bot","username":"bot"}}`))
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"), strings.HasSuffix(r.URL.Path, "/sendPhoto"):
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":77,"date":1,"chat":{"id":-100,"type":"channel"}}}`))
+		default:
+			_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// newAutoPushPipeline 在刮削流水线上挂一个假 Telegram，并打开自动推送。
+func newAutoPushPipeline(t *testing.T, srv *httptest.Server) (*Pipeline, *store.Store) {
+	t.Helper()
+	p, st := newScrapePipeline(t, srv)
+	tg := fakeTelegramServer(t)
+	nt, err := notifier.NewAtServerURL(
+		config.TelegramConfig{Token: "123:test", ChatID: "-1001"},
+		nil, &config.TelegramRate{Enable: false}, tg.URL)
+	if err != nil || nt == nil {
+		t.Fatalf("构造推送器: %+v %v", nt, err)
+	}
+	p.UpdateComponents(p.Scraper(), nt)
+	p.SetAutoPush(true)
+	return p, st
+}
+
+func TestScrape_AutoPushAfterSuccess(t *testing.T) {
+	p, st := newAutoPushPipeline(t, fakeTMDBServer(t))
+	l := &model.Link{
+		ShareID: "auto", URL: "https://guangyapan.com/s/auto_x",
+		Title: "Fight Club", TMDBID: 550, Status: model.StatusPending,
+	}
+	if ok, err := st.Create(l); err != nil || !ok {
+		t.Fatalf("Create: ok=%v err=%v", ok, err)
+	}
+
+	p.Start(1)
+	if n := p.Enqueue("scrape", []int64{l.ID}); n != 1 {
+		t.Fatalf("排队数量 = %d", n)
+	}
+	waitDone(t, p, "scrape")
+
+	deadline := time.Now().Add(3 * time.Second)
+	var got *model.Link
+	for time.Now().Before(deadline) {
+		got, _ = st.Get(l.ID)
+		if got != nil && got.Status == model.StatusPushed {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got == nil || got.Status != model.StatusPushed {
+		t.Fatalf("刮削成功后应自动推送，实际 %+v", got)
+	}
+	if got.TGMessageID != 77 {
+		t.Errorf("推送消息 ID 未回写: %+v", got)
+	}
+	if pr := p.StatusOf("push"); pr.Total != 1 || pr.Done != 1 {
+		t.Errorf("推送进度异常: %+v", pr)
+	}
+}
+
+func TestScrape_NoAutoPushWhenDisabled(t *testing.T) {
+	p, st := newScrapePipeline(t, fakeTMDBServer(t))
+	l := &model.Link{
+		ShareID: "manual", URL: "https://guangyapan.com/s/manual_x",
+		Title: "Fight Club", TMDBID: 550, Status: model.StatusPending,
+	}
+	if ok, err := st.Create(l); err != nil || !ok {
+		t.Fatalf("Create: ok=%v err=%v", ok, err)
+	}
+
+	p.Start(1)
+	p.Enqueue("scrape", []int64{l.ID})
+	waitDone(t, p, "scrape")
+
+	got, err := st.Get(l.ID)
+	if err != nil || got == nil {
+		t.Fatalf("读取记录: %v", err)
+	}
+	if got.Status != model.StatusScraped {
+		t.Errorf("关闭自动推送后应停在已刮削，实际 %s", got.Status)
+	}
+	if pr := p.StatusOf("push"); pr.Total != 0 {
+		t.Errorf("关闭自动推送不应产生推送任务: %+v", pr)
+	}
+}
+
+func TestScrape_SkipsAutoPushWhenAlreadyPushed(t *testing.T) {
+	p, st := newAutoPushPipeline(t, fakeTMDBServer(t))
+	l := &model.Link{
+		ShareID: "re-scrape", URL: "https://guangyapan.com/s/re-scrape_x",
+		Title: "Fight Club", TMDBID: 550, Status: model.StatusPushed,
+	}
+	if ok, err := st.Create(l); err != nil || !ok {
+		t.Fatalf("Create: ok=%v err=%v", ok, err)
+	}
+
+	p.Start(1)
+	p.Enqueue("scrape", []int64{l.ID})
+	waitDone(t, p, "scrape")
+
+	got, err := st.Get(l.ID)
+	if err != nil || got == nil {
+		t.Fatalf("读取记录: %v", err)
+	}
+	if got.Status != model.StatusScraped {
+		t.Errorf("重刮后应回到已刮削，实际 %s", got.Status)
+	}
+	if pr := p.StatusOf("push"); pr.Total != 0 {
+		t.Errorf("已推送记录重刮不应重复推送: %+v", pr)
+	}
+}
+
+// slowTMDBServer 让指定条目的详情请求变慢，用来模拟长时间批量刮削。
+func slowTMDBServer(t *testing.T, delay time.Duration, paths ...string) *httptest.Server {
+	t.Helper()
+	base := fakeTMDBServer(t)
+	slow := map[string]bool{}
+	for _, p := range paths {
+		slow[p] = true
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if slow[r.URL.Path] {
+			time.Sleep(delay)
+		}
+		base.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func waitStatus(t *testing.T, st *store.Store, id int64, want model.Status) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		l, err := st.Get(id)
+		if err == nil && l != nil && l.Status == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("记录 %d 未在超时内进入 %s 状态", id, want)
+}
+
+// 刮削与推送各用一条队列：长批量刮削进行中，推送也要能立刻跑完。
+func TestPushRunsWhileScrapeBatchRunning(t *testing.T) {
+	srv := slowTMDBServer(t, 1200*time.Millisecond, "/3/movie/550")
+	p, st := newScrapePipeline(t, srv)
+	tg := fakeTelegramServer(t)
+	nt, err := notifier.NewAtServerURL(
+		config.TelegramConfig{Token: "123:test", ChatID: "-1001"},
+		nil, &config.TelegramRate{Enable: false}, tg.URL)
+	if err != nil || nt == nil {
+		t.Fatalf("构造推送器: %+v %v", nt, err)
+	}
+	p.UpdateComponents(p.Scraper(), nt)
+
+	scraping := &model.Link{
+		ShareID: "slow-scrape", URL: "https://guangyapan.com/s/slow_x",
+		Title: "Fight Club", TMDBID: 550, Status: model.StatusPending,
+	}
+	ready := &model.Link{
+		ShareID: "ready-push", URL: "https://guangyapan.com/s/ready_x",
+		Title: "Fight Club", TMDBID: 900, Status: model.StatusScraped,
+	}
+	for _, l := range []*model.Link{scraping, ready} {
+		if ok, err := st.Create(l); err != nil || !ok {
+			t.Fatalf("Create(%s): ok=%v err=%v", l.ShareID, ok, err)
+		}
+	}
+
+	p.Start(1)
+	p.Enqueue("scrape", []int64{scraping.ID})
+	waitStatus(t, st, scraping.ID, model.StatusScraping)
+
+	p.Enqueue("push", []int64{ready.ID})
+	if pr := waitDone(t, p, "push"); pr.Done != 1 {
+		t.Fatalf("推送进度异常: %+v", pr)
+	}
+	if !p.StatusOf("scrape").Running {
+		t.Errorf("推送跑完时刮削应仍在进行，实际: %+v", p.StatusOf("scrape"))
+	}
+	waitDone(t, p, "scrape")
+
+	got, err := st.Get(ready.ID)
+	if err != nil || got == nil || got.Status != model.StatusPushed {
+		t.Fatalf("待推送记录应变为已推送: %+v %v", got, err)
 	}
 }

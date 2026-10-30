@@ -177,6 +177,7 @@ func main() {
 			pipe.UpdateComponents(sc, nt)
 		}
 		pipe.SetGuangyaLimit(guangyaLimit)
+		pipe.SetAutoPush(autoPush)
 		startBot(enableBot, *noBot, autoPush, tgNotifier)
 	}
 	build(cfg)

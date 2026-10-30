@@ -37,6 +37,7 @@ pipeline:
     workers: 2
     max_retry: 3
     retry_delay: 5
+    # 刮削成功后自动推送到频道；已推送过的记录重刮不会重复推送
     auto_push: true
 proxy:
     enable: true

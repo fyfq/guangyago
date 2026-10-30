@@ -22,21 +22,32 @@ type User struct {
 func (u *User) IsAdmin() bool { return u.Role == RoleAdmin }
 
 // PublicLink 是对外门户暴露的最小字段集：只够展示与取链接，不含内部状态与错误信息。
+// 同一个 TMDB 条目下的多条分享链接在门户里合并成一条，Links 是全部分享，
+// URL/Code/SharedAt/ID 取自其中最近分享的一条，方便直接打开详情。
 type PublicLink struct {
-	ID            int64     `json:"id"`
-	Title         string    `json:"title"`
-	OriginalTitle string    `json:"original_title"`
-	Year          int       `json:"year"`
-	MediaType     MediaType `json:"media_type"`
-	TMDBID        int64     `json:"tmdb_id"`
-	Overview      string    `json:"overview"`
-	Genres        string    `json:"genres"`
-	VoteAverage   float64   `json:"vote_average"`
-	Runtime       int       `json:"runtime"`
-	PosterURL     string    `json:"poster_url"`
-	URL           string    `json:"url"`
-	Code          string    `json:"code"`
-	SharedAt      string    `json:"shared_at"`
+	ID            int64         `json:"id"`
+	Title         string        `json:"title"`
+	OriginalTitle string        `json:"original_title"`
+	Year          int           `json:"year"`
+	MediaType     MediaType     `json:"media_type"`
+	TMDBID        int64         `json:"tmdb_id"`
+	Overview      string        `json:"overview"`
+	Genres        string        `json:"genres"`
+	VoteAverage   float64       `json:"vote_average"`
+	Runtime       int           `json:"runtime"`
+	PosterURL     string        `json:"poster_url"`
+	URL           string        `json:"url"`
+	Code          string        `json:"code"`
+	SharedAt      string        `json:"shared_at"`
+	LinkCount     int           `json:"link_count"`
+	Links         []PublicShare `json:"links,omitempty"`
+}
+
+// PublicShare 是门户详情里的一条分享链接。
+type PublicShare struct {
+	URL      string `json:"url"`
+	Code     string `json:"code"`
+	SharedAt string `json:"shared_at"`
 }
 
 // PublicFilter 是门户列表的查询条件。

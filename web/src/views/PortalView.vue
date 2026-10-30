@@ -18,7 +18,7 @@ import {
 } from 'lucide-vue-next'
 import Button from '../components/ui/Button.vue'
 import Badge from '../components/ui/Badge.vue'
-import { api, mediaMeta, type PortalLink, type PortalStats } from '../lib/api'
+import { api, mediaMeta, type PortalLink, type PortalShare, type PortalStats } from '../lib/api'
 import { branding } from '../lib/branding'
 import { toast } from '../lib/toast'
 import { safeExternalUrl } from '../lib/utils'
@@ -35,6 +35,8 @@ const loading = ref(false)
 const loadingMore = ref(false)
 const error = ref('')
 const detail = ref<PortalLink | null>(null)
+// 同一个 TMDB 的多条分享在服务端已合并，详情直接列出全部链接
+const detailShares = computed<PortalShare[]>(() => detail.value?.links ?? [])
 const overviewExpanded = ref(false)
 const overviewElement = ref<HTMLElement | null>(null)
 const overviewOverflow = ref(false)
@@ -258,8 +260,8 @@ async function copyText(text: string) {
   }
 }
 
-async function copyLink(l: PortalLink) {
-  const text = l.code ? `${l.url}\n提取码：${l.code}` : l.url
+async function copyShare(s: PortalShare) {
+  const text = s.code ? `${s.url}\n提取码：${s.code}` : s.url
   if (await copyText(text)) toast.success('链接已复制')
   else toast.error('复制失败，请重试或点击打开链接')
 }
@@ -562,6 +564,14 @@ onUnmounted(() => {
               >
                 {{ mediaMeta[l.media_type].label }}
               </Badge>
+              <span
+                v-if="(l.link_count ?? 1) > 1"
+                class="absolute bottom-2 right-2 flex items-center gap-0.5 rounded-full bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white"
+                :title="`共 ${l.link_count} 条分享链接`"
+              >
+                <Share2 class="h-3 w-3" />
+                {{ l.link_count }}
+              </span>
             </div>
             <p class="mt-2 truncate text-[13px] font-medium">{{ l.title || '—' }}</p>
             <p class="truncate text-xs text-[var(--color-muted)]">
@@ -672,24 +682,33 @@ onUnmounted(() => {
               </button>
             </div>
 
-            <div v-if="detail.code" class="mt-3 shrink-0 rounded-lg bg-[var(--color-surface-sunken)] p-3 text-[13px]">
-              提取码 <span class="font-mono font-medium">{{ detail.code }}</span>
-            </div>
-
-            <div class="mt-3 flex shrink-0 flex-wrap items-center gap-2">
-              <Button v-if="detail.url" size="sm" @click="copyLink(detail)">
-                <Copy class="h-4 w-4" />
-                复制链接{{ detail.code ? '与提取码' : '' }}
-              </Button>
-              <a v-if="detail.url && safeExternalUrl(detail.url)" :href="safeExternalUrl(detail.url)" target="_blank" rel="noopener noreferrer">
-                <Button size="sm" variant="outline">
-                  <ExternalLink class="h-4 w-4" />
-                  打开光鸭
+            <div
+              v-if="detailShares.length"
+              class="mt-3 max-h-32 shrink-0 space-y-1.5 overflow-y-auto rounded-lg bg-[var(--color-surface-sunken)] p-3 text-[13px]"
+            >
+              <div v-for="(s, i) in detailShares" :key="s.url || i" class="flex items-center gap-2">
+                <div class="min-w-0 flex-1 truncate">
+                  <span class="text-[var(--color-muted)]">分享 {{ i + 1 }}</span>
+                  <span v-if="s.code" class="ml-2">提取码 <span class="font-mono font-medium">{{ s.code }}</span></span>
+                  <span v-if="s.shared_at" class="ml-2 text-xs text-[var(--color-faint)]">
+                    {{ s.shared_at.slice(0, 10) }}
+                  </span>
+                </div>
+                <Button v-if="s.url" size="sm" variant="outline" @click="copyShare(s)">
+                  <Copy class="h-3.5 w-3.5" />
+                  复制
                 </Button>
-              </a>
-              <span v-if="detail.shared_at" class="text-xs text-[var(--color-faint)]">
-                分享于 {{ detail.shared_at.slice(0, 10) }}
-              </span>
+                <a
+                  v-if="s.url && safeExternalUrl(s.url)"
+                  :href="safeExternalUrl(s.url)"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="flex shrink-0 items-center gap-1 text-xs text-[var(--color-brand)] hover:underline"
+                >
+                  <ExternalLink class="h-3.5 w-3.5" />
+                  打开
+                </a>
+              </div>
             </div>
           </div>
         </div>

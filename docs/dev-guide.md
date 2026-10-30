@@ -84,7 +84,7 @@
 
 ## 5. 流水线
 
-- 任务粒度是单条记录：`job{kind, linkID, batch}` 投进 `jobs`（缓冲 1024）。
+- 任务粒度是单条记录：`job{kind, linkID, batch}` 按类型投进各自的队列（`scrapeJobs` / `pushJobs`，各缓冲 1024）。刮削用 `workers` 个 worker，推送只用 1 个（限流器本来就在压速，顺序发送更稳）；两条队列互不阻塞，长批量刮削期间推送照常推进。
 - 每个 kind 一份 `Progress`；`Enqueue` 时若不运行则自增批次号，`feed` goroutine 发现批次号变了就停止投喂——这是 `Cancel` 与重复点击的实现方式。在途任务靠 `stale()` 判定，结果会被丢弃（不计入进度）。
 - 单任务上下文超时 60 秒。
 - **已确认的 TMDB ID 不再被标题相似度打回**：`link.TMDBID > 0` 且 `Fetch` 成功、原状态不是 `review` 时算 pinned，跳过 `LowConfidence` → 待核实这条判定。中英文标题天然对不上，否则人工补 ID 或重刮会反复被转回待核实、补 ID 失去意义；`review` 里的 ID 来自自动搜索、尚未人工确认，仍会重新评估。
@@ -119,7 +119,7 @@
 | `tmdb` | `api_key`（32 位 Key 或 `eyJ` 开头的 Read Token 自适应）、`language`、`image_base`、`poster_size`、`min_score`、`cache_poster` |
 | `telegram` | `token`、`chat_id`（`ChatID` 同时接受数字与 `@频道名`）、`enable_bot`、`silent` |
 | `netdisk` | `guangya_hosts`、`user_agent`、`cookie`、`timeout` |
-| `pipeline` | `workers`、`auto_push`、（`max_retry`/`retry_delay` 目前是死配置） |
+| `pipeline` | `workers`、`auto_push`（刮削成功后自动推送，已推送记录重刮不重复推送）、（`max_retry`/`retry_delay` 目前是死配置） |
 | `proxy` | `enable`、`addr`（裸 `host:port` 按 socks5 处理）、`username`、`password` |
 | `seo` | `google_verification`、`base_url`、`site_name`、`logo_file`/`icon_file`（后台上传素材的文件名，由接口写入，图片落在 `<data_dir>/branding/`） |
 | `rate_limit` | `tmdb.per_second/burst/shared_credentials`、`telegram.interval_ms/channel_only/shared_credentials/paid_broadcast`、`guangya.concurrency`；`Effective*` 会夹到官方下限（群组 3000ms、会话 1000ms、TMDB ≤40/s） |
@@ -208,6 +208,6 @@ go build -o guangya-go ./cmd/server   # 必须再编一次，否则前端改动�
 - 「设置」页曾把脱敏后的代理地址回填再保存，导致配置被掩码覆盖。现在 `addr`/`username` 一律明文返回（`has_password` 只表示有没有设密码）。**新增敏感字段时沿用这个策略，不要给可回写的字段加脱敏**。
 - 前端改动不生效通常是忘了 `make web` 之后还要 `go build`。
 - `web/index.html` 里放静态 `<link rel="canonical" href="/">` 会让 Vite 构建报 `EISDIR`；canonical 现在由服务端注入，别加回去。
-- 推送后一直显示「排队中」的问题尚未定位（怀疑 worker 未消费 / notifier 为 nil / 限流阻塞）。现在日志会落盘，直接从 `data/logs/app.log` 里捞 `推送跳过：未配置 Telegram Bot Token`、`批次结束`、`已取消排队任务`，再对照 `Progress.Current` 与 `pipeline.worker`。
+- ~~推送后一直显示「排队中」~~：已定位并修复。原先刮削与推送共用一条队列和同一批 worker，长批量刮削会把推送堵在队尾；现在两类任务各有一条队列与独立 worker，可以同时推进（回归测试 `TestPushRunsWhileScrapeBatchRunning`）。若仍卡在「排队中」，先捞 `data/logs/app.log` 里的 `推送跳过：未配置 Telegram Bot Token`、`批次结束`、`已取消排队任务`，再对照 `Progress.Current` 与 `internal/pipeline` 的 worker。
 - 日志是标准输出与文件**双写**，单文件只有 5 MB、保留 3 份（约 20 MB 上限）。别把响应体、整段 CSV 或循环里的每条记录 `Info` 出来——一轮批量刮削就能把有效历史冲走，等于自断排查线索。批量场景记「批次结束」那种汇总级别，单条细节留在 Debug。
 - 本仓库可能同时被多个会话编辑；提交前 `git status` 确认工作区内容，`git diff` 检查有没有别人的改动被一起带进来。

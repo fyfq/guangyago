@@ -201,7 +201,14 @@ export interface User {
   created_at: string
 }
 
-/** 门户只暴露展示所需字段，不含内部状态与错误信息 */
+/** 门户详情里的一条分享链接 */
+export interface PortalShare {
+  url: string
+  code: string
+  shared_at: string
+}
+
+/** 门户只暴露展示所需字段，不含内部状态与错误信息；同 TMDB 的多条分享合并为一条 */
 export interface PortalLink {
   id: number
   title: string
@@ -217,6 +224,8 @@ export interface PortalLink {
   url: string
   code: string
   shared_at: string
+  link_count: number
+  links?: PortalShare[]
 }
 
 export interface PortalYearStat {

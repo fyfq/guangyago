@@ -37,7 +37,7 @@
 | `tg_message_id` | int64 | 推送后的 Telegram 消息 ID |
 | `created_at` / `updated_at` | RFC3339 | 时间戳 |
 
-`PublicLink`（门户最小字段集）：`id, title, original_title, year, media_type, tmdb_id, overview, genres, vote_average, runtime, poster_url, url, code, shared_at`。`poster_url` 优先返回本地缓存海报的同源路径（`/posters/movie-129.jpg`），缓存不存在时才回退刮削时记录的 TMDB 远程地址；两者都是浏览器可直接加载的地址。
+`PublicLink`（门户最小字段集）：`id, title, original_title, year, media_type, tmdb_id, overview, genres, vote_average, runtime, poster_url, url, code, shared_at, link_count, links`。同一个 TMDB 条目（`media_type + tmdb_id`）下的多条分享在门户里合并成一条资源：`link_count` 是链接数，`links` 是全部 `{url, code, shared_at}`（最近分享在前），顶层 `id/url/code/shared_at` 取自最近分享的那条。未刮削出 TMDB ID 的记录按自身 ID 独立成组。`poster_url` 优先返回本地缓存海报的同源路径（`/posters/movie-129.jpg`），缓存不存在时才回退刮削时记录的 TMDB 远程地址；两者都是浏览器可直接加载的地址。
 
 `User`：`id, username, display_name, role(admin|operator), enabled, last_login_at, created_at`（不含密码字段）。
 
@@ -85,7 +85,7 @@
 同一 IP 或同一用户名连续 5 次失败 → `429 {"error":"尝试次数过多，请 5 分钟后再试"}`。
 
 ### `GET /api/portal/links`
-公开门户列表。收录口径是「刮削成功即入库」：`status IN ('scraped','pushed','push_failed')`，推送只是发布到 Telegram 频道，不影响门户可见性。
+公开门户列表。收录口径是「刮削成功即入库」：`status IN ('scraped','pushed','push_failed')`，推送只是发布到 Telegram 频道，不影响门户可见性。同一 `media_type + tmdb_id` 的多条分享合并为一条，`total` 是合并后的资源数；排序按组内最近分享的那条计算。
 
 | 查询参数 | 默认 | 说明 |
 | --- | --- | --- |
@@ -99,7 +99,7 @@
 → `{"total": 123, "items": [PublicLink...]}`
 
 ### `GET /api/portal/stats`
-筛选栏计数：分类数忽略分类条件、年份数忽略年份条件，`library_total` 不随筛选变化。参数同上（除 `sort/limit/offset`）。
+筛选栏计数：分类数忽略分类条件、年份数忽略年份条件，`library_total` 不随筛选变化。计数单位与列表一致，是 TMDB 合并后的资源数。参数同上（除 `sort/limit/offset`）。
 
 ```json
 { "total": 42, "movies": 30, "tv": 12, "library_total": 318,
@@ -107,13 +107,18 @@
 ```
 
 ### `GET /api/portal/link/:id`
-单条已收录资源（`PublicLink`），供门户 `/?id=<n>` 深链直接打开详情。未收录（还没刮削成功）→ `404 {"error":"资源不存在"}`；`id` 非法 → `400`。
+单条已收录资源（`PublicLink`），供门户 `/?id=<n>` 深链直接打开详情。传组内任意一条分享的 `id` 都返回整组资源与全部链接。未收录（还没刮削成功）→ `404 {"error":"资源不存在"}`；`id` 非法 → `400`。
 
 ```json
 { "id": 42, "title": "千与千寻", "original_title": "千と千尋の神隠し", "year": 2001,
   "media_type": "movie", "tmdb_id": 129, "overview": "…", "genres": "动画 / 奇幻",
   "vote_average": 8.5, "runtime": 125, "poster_url": "/posters/movie-129.jpg",
-  "url": "https://www.guangyapan.com/s/…", "code": "abcd", "shared_at": "2026-10-27 16:37:34" }
+  "url": "https://www.guangyapan.com/s/…", "code": "abcd", "shared_at": "2026-10-27 16:37:34",
+  "link_count": 2,
+  "links": [
+    { "url": "https://www.guangyapan.com/s/…", "code": "abcd", "shared_at": "2026-10-27 16:37:34" },
+    { "url": "https://www.guangyapan.com/s/…", "code": "efgh", "shared_at": "2026-09-01 08:00:00" }
+  ] }
 ```
 
 > 有本地缓存时 `poster_url` 是 `/posters/movie-129.jpg`；缓存缺失时才回退 `https://image.tmdb.org/…`。
@@ -201,6 +206,7 @@ XML（`Content-Type: application/xml`，`Cache-Control: public, max-age=3600`）
 ```
 
 - `id` 缺失、非法或记录还没刮削成功时，退回站点级标签，页面仍是可用的列表页。
+- 同一 TMDB 的多条分享在详情里合并展示，组内任意一条分享的 `id` 都会渲染同一部资源。
 - 标签值全部经 `html.EscapeString` 转义，JSON-LD 由 `json.Marshal` 转义尖括号，不引入内联脚本。
 - 门户 URL 与页面状态双向绑定：`?id` 详情、`?q` 关键词、`?media_type`、`?year`、`?sort`（打开详情用 `pushState`，改筛选只 `replaceState`）。前端挂载时按 URL 回填，`data-item-id` 命中当前资源时不再重复请求 `/api/structured-data/:id`。
 - `canonical` 对带 `id` 的请求只保留 `id`，避免 `?id=42&q=x` 这类组合被规范到列表页；`sitemap.xml` 的 `lastmod` 与 `datePublished` 用同一个 `schemaDate`。
@@ -368,7 +374,7 @@ TMDB 预览，**只读不写库**，用于补 ID 时先核对。参数可放 JSO
   "tmdb_api_key": "...",        // 空串忽略
   "tg_token": "...",            // 空串忽略
   "chat_id": "@channel",        // 空串忽略；支持数字 ID 或 @频道名
-  "auto_push": true,            // 省略则不改
+  "auto_push": true,            // 省略则不改；刮削成功后自动推送，已推送记录重刮不重复推送
   "public_url": "https://gy.example.com",  // 省略则不改；空串清空（回到按请求 Host 判断）
   "save_to_file": true,         // 是否写回 config.yaml（否则只活到本次进程）
   "proxy": { "enable": true, "addr": "host:7890", "username": "", "password": "" },

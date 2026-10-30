@@ -51,7 +51,10 @@ type Pipeline struct {
 	store    *store.Store
 	scraper  *scraper.Client
 	notifier *notifier.Notifier
-	jobs     chan job
+	// 刮削与推送各用一条队列和各自的 worker：长批量刮削不能把推送堵在同一个队列后面，
+	// 两类任务必须能同时推进。
+	scrapeJobs chan job
+	pushJobs   chan job
 	// ctx 生命周期覆盖整个 pipeline，Stop 后所有 worker 与 feed goroutine 都会退出。
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -63,6 +66,8 @@ type Pipeline struct {
 	// guangya 是光鸭分享检测的并发上限。光鸭没有公布官方配额，
 	// 默认只允许 2 个并发，接入分享检测后由 GuangyaGuard 统一把关。
 	guangya *ratelimit.Semaphore
+	// autoPush 控制刮削成功后是否自动把记录加入推送队列。
+	autoPush bool
 	// started 记录已经启动的 worker 数，避免热更新时重复起 goroutine。
 	started bool
 }
@@ -70,15 +75,16 @@ type Pipeline struct {
 func New(st *store.Store, sc *scraper.Client, nt *notifier.Notifier) *Pipeline {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Pipeline{
-		store:    st,
-		scraper:  sc,
-		notifier: nt,
-		jobs:     make(chan job, 1024),
-		ctx:      ctx,
-		cancel:   cancel,
-		progress: map[jobKind]*Progress{},
-		batch:    map[jobKind]int64{},
-		guangya:  ratelimit.NewSemaphore(config.DefaultGuangyaConcurrency),
+		store:      st,
+		scraper:    sc,
+		notifier:   nt,
+		scrapeJobs: make(chan job, 1024),
+		pushJobs:   make(chan job, 1024),
+		ctx:        ctx,
+		cancel:     cancel,
+		progress:   map[jobKind]*Progress{},
+		batch:      map[jobKind]int64{},
+		guangya:    ratelimit.NewSemaphore(config.DefaultGuangyaConcurrency),
 	}
 }
 
@@ -86,6 +92,13 @@ func New(st *store.Store, sc *scraper.Client, nt *notifier.Notifier) *Pipeline {
 // 幂等，重复调用安全。
 func (p *Pipeline) Stop() {
 	p.cancel()
+}
+
+// SetAutoPush 控制刮削成功后是否自动推送，界面改配置后即时生效。
+func (p *Pipeline) SetAutoPush(v bool) {
+	p.mu.Lock()
+	p.autoPush = v
+	p.mu.Unlock()
 }
 
 // SetGuangyaLimit 更新光鸭分享检测的并发上限，界面改配置后即时生效。
@@ -134,17 +147,28 @@ func (p *Pipeline) Start(workers int) {
 	p.started = true
 	p.mu.Unlock()
 	for i := 0; i < workers; i++ {
-		go p.worker()
+		go p.worker(jobScrape)
 	}
+	// 推送已有全局限流器压速，单 worker 顺序发送即可，也不用跟刮削抢并发。
+	go p.worker(jobPush)
 }
 
-// worker 消费任务，收到关停信号后退出。
-func (p *Pipeline) worker() {
+// jobsFor 返回该类型任务对应的队列。
+func (p *Pipeline) jobsFor(kind jobKind) chan job {
+	if kind == jobPush {
+		return p.pushJobs
+	}
+	return p.scrapeJobs
+}
+
+// worker 消费指定类型的任务，收到关停信号后退出。
+func (p *Pipeline) worker(kind jobKind) {
+	jobs := p.jobsFor(kind)
 	for {
 		select {
 		case <-p.ctx.Done():
 			return
-		case j, ok := <-p.jobs:
+		case j, ok := <-jobs:
 			if !ok {
 				return
 			}
@@ -186,6 +210,7 @@ func (p *Pipeline) Enqueue(kind string, ids []int64) int {
 // feed 把本批次的 ID 依次写入队列，批次失效（取消或替换）时提前退出。
 // 队列满或 pipeline 关停时也能中断，不会永久阻塞。
 func (p *Pipeline) feed(kind jobKind, batch int64, ids []int64) {
+	jobs := p.jobsFor(kind)
 	for _, id := range ids {
 		p.mu.Lock()
 		stale := p.batch[kind] != batch
@@ -196,7 +221,7 @@ func (p *Pipeline) feed(kind jobKind, batch int64, ids []int64) {
 		select {
 		case <-p.ctx.Done():
 			return
-		case p.jobs <- job{kind: kind, linkID: id, batch: batch}:
+		case jobs <- job{kind: kind, linkID: id, batch: batch}:
 		}
 	}
 }
@@ -333,6 +358,8 @@ func (p *Pipeline) scrape(ctx context.Context, j job, l *model.Link, sc *scraper
 		return
 	}
 	start := time.Now()
+	// 已推送过的记录重刮时不再自动推送，避免改名/修正后重复发到频道
+	wasPushed := l.Status == model.StatusPushed
 	slog.Debug("开始刮削", "id", l.ID, "title", l.RawTitle, "tmdb_id", l.TMDBID)
 	p.updateStatus(l.ID, model.StatusScraping, "")
 
@@ -407,6 +434,31 @@ func (p *Pipeline) scrape(ctx context.Context, j job, l *model.Link, sc *scraper
 	slog.Info("刮削完成", "id", l.ID, "tmdb_id", res.TMDBID, "media_type", res.MediaType,
 		"title", res.Title, "score", res.MatchScore, "elapsed_ms", time.Since(start).Milliseconds())
 	p.tick(j, true, res.Title, "")
+	p.autoPushAfterScrape(l.ID, wasPushed)
+}
+
+// autoPushAfterScrape 在刮削成功后把记录加入推送队列。
+// 未开启自动推送、没有推送器或已经推过（重刮）时跳过。
+func (p *Pipeline) autoPushAfterScrape(id int64, wasPushed bool) {
+	if wasPushed {
+		return
+	}
+	p.mu.Lock()
+	on := p.autoPush
+	nt := p.notifier
+	p.mu.Unlock()
+	if !on {
+		return
+	}
+	if nt == nil {
+		slog.Debug("刮削完成但未配置 Telegram，跳过自动推送", "id", id)
+		return
+	}
+	if p.Enqueue("push", []int64{id}) == 0 {
+		slog.Debug("自动推送未入队", "id", id)
+		return
+	}
+	slog.Debug("刮削完成，已加入推送队列", "id", id)
 }
 
 // scrapedBefore 判断这条记录是否已经成功刮削过。

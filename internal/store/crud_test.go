@@ -426,7 +426,7 @@ func TestPublicQueries(t *testing.T) {
 	s := newTestStore(t)
 	// media_type / vote_average 由 UpdateScraped 写入，门户收录刮削成功的记录，
 	// 所以这里走 Create → UpdateScraped（→ UpdatePushed）的真实链路。
-	mk := func(share, title string, year int, mt model.MediaType, rating float64, pushed bool, sharedAt string) *model.Link {
+	mk := func(share, title string, year int, mt model.MediaType, rating float64, pushed bool, sharedAt string, tmdbID int64) *model.Link {
 		l := &model.Link{
 			ShareID: share, URL: "https://guangyapan.com/s/" + share + "_x",
 			Status: model.StatusPending, SharedAt: sharedAt,
@@ -434,7 +434,7 @@ func TestPublicQueries(t *testing.T) {
 		mustCreateLink(t, s, l)
 		scraped := &model.Link{
 			Title: title, Year: year, MediaType: mt, VoteAverage: rating,
-			TMDBID: 1,
+			TMDBID: tmdbID,
 		}
 		if err := s.UpdateScraped(l.ID, scraped); err != nil {
 			t.Fatal(err)
@@ -446,15 +446,17 @@ func TestPublicQueries(t *testing.T) {
 		}
 		return l
 	}
-	mk("p1", "电影A", 2020, model.MediaMovie, 7.0, true, "2026-01-01")
-	mk("p2", "剧集B", 2021, model.MediaTV, 9.0, true, "2026-02-01")
-	mk("p3", "电影C", 2020, model.MediaMovie, 5.0, true, "")
-	p4 := mk("p4", "待推送D", 2022, model.MediaMovie, 8.0, false, "2026-03-01")
+	p1 := mk("p1", "电影A", 2020, model.MediaMovie, 7.0, true, "2026-01-01", 101)
+	mk("p2", "剧集B", 2021, model.MediaTV, 9.0, true, "2026-02-01", 102)
+	mk("p3", "电影C", 2020, model.MediaMovie, 5.0, true, "", 103)
+	p4 := mk("p4", "待推送D", 2022, model.MediaMovie, 8.0, false, "2026-03-01", 104)
 	// 脏数据：javascript: 链接必须被过滤为空
-	bad := mk("p5", "脏链接E", 2019, model.MediaMovie, 6.0, true, "2026-04-01")
+	bad := mk("p5", "脏链接E", 2019, model.MediaMovie, 6.0, true, "2026-04-01", 105)
 	if _, err := s.db.Exec(`UPDATE links SET url='javascript:alert(1)' WHERE id=?`, bad.ID); err != nil {
 		t.Fatal(err)
 	}
+	// 同一个 TMDB 的第二条分享：门户合并成一张卡，代表行取最近分享的那条
+	same := mk("p7", "电影A", 2020, model.MediaMovie, 7.0, true, "2026-06-01", 101)
 	// 还没刮削的记录不应出现在门户里
 	pending := &model.Link{
 		ShareID: "p6", URL: "https://guangyapan.com/s/p6_x",
@@ -467,12 +469,29 @@ func TestPublicQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	if total != 5 || len(items) != 5 {
-		t.Fatalf("门户应含 5 条刮削成功的记录（含待推送），实际 total=%d len=%d", total, len(items))
+		t.Fatalf("门户应按 TMDB 合并为 5 条（含待推送），实际 total=%d len=%d", total, len(items))
 	}
+	// 同一 TMDB 的两条分享只出现一次，链接数如实统计
+	merged := 0
 	for _, it := range items {
+		if it.TMDBID == 101 {
+			merged++
+			if it.ID != same.ID {
+				t.Errorf("合并后的代表行应取最近分享的 %d，实际 %d", same.ID, it.ID)
+			}
+			if it.LinkCount != 2 || len(it.Links) != 2 {
+				t.Errorf("同 TMDB 应合并 2 条链接，实际 link_count=%d links=%d", it.LinkCount, len(it.Links))
+			}
+			if len(it.Links) == 2 && it.Links[0].SharedAt != "2026-06-01" {
+				t.Errorf("链接应最近分享在前，实际 %+v", it.Links)
+			}
+		}
 		if it.ID == bad.ID && it.URL != "" {
 			t.Errorf("javascript: 链接未被过滤: %q", it.URL)
 		}
+	}
+	if merged != 1 {
+		t.Errorf("TMDB 101 应只出现 1 次，实际 %d", merged)
 	}
 
 	// 分类筛选
@@ -542,7 +561,28 @@ func TestPublicQueries(t *testing.T) {
 		}
 	}
 
-	// GetPublic：刮削成功即可读，未刮削的读不到
+	// 站点地图与列表共用分组口径：同 TMDB 只出现一次，最近分享的链接排最前
+	sm, err := s.Sitemap(0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sm.Total != 5 || len(sm.Entries) != 5 {
+		t.Errorf("sitemap 应按 TMDB 合并为 5 条，实际 total=%d len=%d", sm.Total, len(sm.Entries))
+	}
+	if len(sm.Entries) == 5 && sm.Entries[0].ID != same.ID {
+		t.Errorf("sitemap 首条应为最近分享的 %d，实际 %d", same.ID, sm.Entries[0].ID)
+	}
+
+	// GetPublic：任一分享 ID 都能取到整组；未刮削的读不到
+	for _, id := range []int64{p1.ID, same.ID} {
+		p, err := s.GetPublic(id)
+		if err != nil || p == nil {
+			t.Fatalf("同组分享 %d 应可读: %+v err=%v", id, p, err)
+		}
+		if p.ID != same.ID || p.LinkCount != 2 || len(p.Links) != 2 {
+			t.Errorf("GetPublic(%d) 应返回整组并取最近分享为代表: %+v", id, p)
+		}
+	}
 	if p, err := s.GetPublic(bad.ID); err != nil || p == nil {
 		t.Errorf("已推送记录应可读: %+v err=%v", p, err)
 	}

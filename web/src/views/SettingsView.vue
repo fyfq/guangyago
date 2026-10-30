@@ -349,10 +349,15 @@ onMounted(load)
           </div>
         </div>
 
-        <label class="flex items-center gap-2 text-[13px]">
-          <input v-model="form.auto_push" type="checkbox" />
-          Bot 收到链接后自动刮削
-        </label>
+        <div>
+          <label class="flex items-center gap-2 text-[13px]">
+            <input v-model="form.auto_push" type="checkbox" />
+            录入后自动刮削并推送
+          </label>
+          <p class="ml-6 mt-1 text-xs text-[var(--color-muted)]">
+            Bot 或手动导入的链接刮削完成后自动推送到频道；已推送过的记录重刮不会重复推送
+          </p>
+        </div>
 
         <label class="flex items-center gap-2 text-[13px]">
           <input v-model="form.save_to_file" type="checkbox" />

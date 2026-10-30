@@ -289,6 +289,9 @@ func TestPortalAPI(t *testing.T) {
 	if list.Items[0].ID != tv.ID {
 		t.Errorf("应按分享时间倒序，首条 = %d 期望 %d", list.Items[0].ID, tv.ID)
 	}
+	if list.Items[0].LinkCount != 1 || len(list.Items[0].Links) != 1 {
+		t.Errorf("单条分享的链接数应为 1: %+v", list.Items[0])
+	}
 
 	rec = e.callAnon(http.MethodGet, "/api/portal/links?media_type=movie", nil)
 	decodeInto(t, rec, &list)
@@ -337,6 +340,9 @@ func TestPortalAPI(t *testing.T) {
 	decodeInto(t, rec, &item)
 	if item.Title != "教父" {
 		t.Errorf("门户详情异常: %+v", item)
+	}
+	if item.LinkCount != 1 || len(item.Links) != 1 {
+		t.Errorf("详情应带出链接列表: %+v", item)
 	}
 	requireStatus(t, e.callAnon(http.MethodGet, "/api/portal/link/99999", nil), http.StatusNotFound)
 	requireStatus(t, e.callAnon(http.MethodGet, "/api/portal/link/abc", nil), http.StatusBadRequest)

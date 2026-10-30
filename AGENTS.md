@@ -180,12 +180,12 @@ git diff --cached --stat    # 单次 diff 控制在 300 行内
 
 | 触发 | 产出 | 说明 |
 |---|---|---|
-| push `main` | `main`、`sha-<7>` | 验证构建，不动 `latest` |
-| push `v*` | `v2.1.0`、`2.1`、`latest` | `latest` 只由正式 tag 推进 |
+| main（CI 通过后） | `main`、`sha-<7>` | 由 `workflow_run` 在 CI 成功后触发，失败提交不产出镜像；不动 `latest` |
+| push `v*` | `v2.1.0`、`2.1`、`latest` | 复制 main 已构建的 `sha-<7>`，不重复构建；缺镜像才回退完整构建；`latest` 只由正式 tag 推进 |
 | 手动 dispatch | `edge` | 临时验证，可随时覆盖 |
 
 部署固定版本号（`ghcr.io/fyfq/guangyago:v2.1.0`），回滚只改这一行；拉 `latest` 等于"最近一次正式发版"。
 
 ### 构建触发
 
-纯文档提交（`**.md`、`docs/**`、`LICENSE`、`.gitignore`）不触发镜像构建；同分支并发会自动取消旧构建。推送前先判断本次改动是否值得跑一次 amd64+arm64 构建。
+纯文档提交（`**.md`、`docs/**`、`LICENSE`、`.gitignore`）不触发 CI 与镜像构建；main 镜像在 CI 通过后才由 `workflow_run` 触发，同分支并发会自动取消旧构建。推送前先判断本次改动是否值得跑一次 amd64+arm64 构建。

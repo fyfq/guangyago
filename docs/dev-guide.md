@@ -181,7 +181,7 @@ go build -o guangya-go ./cmd/server   # 必须再编一次，否则前端改动�
 - `Dockerfile` 三阶段：`node:22-alpine` 出前端 → `golang:1.26-alpine` 交叉编译（`CGO_ENABLED=0`、`-trimpath -s -w`）→ `alpine:3.22` 运行（`ca-certificates`/`tzdata`、`USER 1000`、`EXPOSE 8090`、配置在 `/app/data/config.yaml`）。构建参数 `BUILD_PROXY`（只认 HTTP 端口）、`NPM_REGISTRY`、`GOPROXY`；首行刻意不写 `# syntax=`，避免 BuildKit 先去 Docker Hub 拉前端镜像。
 - `docker-compose.yml`：单服务 `app`，`pull_policy: always` + `image: ghcr.io/fyfq/guangyago:latest`，`8090:8090`，`./data:/app/data`，`host-gateway` 映射 `host.docker.internal`，`/api/health` 健康检查。站点素材写在 `<data_dir>/branding/`、运行日志写在 `<data_dir>/logs/`（都是进程属主可写，0750 目录 / 0600 文件），跟着 `./data` 卷一起备份，无需额外挂载。
 - `.github/workflows/ci.yml`：push main / PR / 手动触发 → `make tools` → `make lint` → `go test ./...` → `make web && make build` → `make smoke`（约 1 秒）；纯文档改动（`**.md`、`docs/**`、`LICENSE`、`.gitignore`）不跑，同分支并发自动取消旧任务。
-- `.github/workflows/docker-image.yml`：push main / `v*` tag / 手动触发 → QEMU+Buildx 多架构（amd64+arm64）推 GHCR。
+- `.github/workflows/docker-image.yml`：CI 成功（`workflow_run`）或手动触发 → QEMU+Buildx 多架构（amd64+arm64）构建 `main`、`sha-<7>`、`edge`，失败提交不产出镜像；push `v*` tag → 只把 main 侧已构建的 `sha-<7>` 复制成版本标签与 `latest`（`buildx imagetools create`，秒级，不重复构建）；该提交没有 main 镜像时最多等 15 分钟，仍缺失才回退完整构建。
 - 裸机：交叉编译出的单文件无任何依赖（纯 Go SQLite + 嵌入前端），配 `guangya.service`（`DynamicUser`，状态目录 `/var/lib/guangya/data/`）。
 - 公网部署务必挂 HTTPS 反向代理；`PROXY_ADDR` 指向宿主机代理时写 `host.docker.internal:7890`，写 `127.0.0.1` 指向的是容器自己。
 

@@ -1,8 +1,13 @@
 name: Build & Push Docker Image
 
 on:
-  push:
+  # main 镜像等 CI 通过后再构建，避免为失败的提交产出可部署镜像。
+  # workflow_run 的 GITHUB_SHA 是默认分支最新提交，构建时改用 workflow_run.head_sha。
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
+  push:
     tags: ['v*']
     # 纯文档 / 元数据改动不重建镜像，省 runner 和构建时间。
     # 注意：paths 过滤对 tag 推送同样生效，若某个 v* tag 相对上一提交只改了这些文件，
@@ -14,7 +19,7 @@ on:
       - '.gitignore'
   workflow_dispatch:
 
-# 同一分支重复推送时取消上一次未完成的构建，避免并发占满 runner
+# 同一 ref 重复推送时取消上一次未完成的构建，避免并发占满 runner
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -24,7 +29,62 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # main 推送（CI 通过后）与手动触发：完整构建多架构镜像，产出 main / sha-<7> / edge。
+  # 这些镜像不覆盖 latest，latest 只由正式发版 tag 推进。
   build:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        # workflow_run 的默认 GITHUB_SHA 可能已随新提交前移，这里固定成 CI 实际验证的那次提交
+        env:
+          GITHUB_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # 正式发版：同一次提交在 main 上已经构建过 sha-<7>，这里只做标签复制（秒级），不再重建。
+  # main 侧构建尚未完成时先等待；确实没有（例如 tag 打在历史提交上）才回退到完整构建。
+  release:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -47,27 +107,53 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # latest 只由正式发版 tag 推进，main 上的验证构建不会覆盖它
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
+      - name: Compute release tags
+        id: tags
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
 
-      - name: Build & push
+      - name: Wait for tested image
+        id: src
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          sha_tag="sha-${GITHUB_SHA:0:7}"
+          found=false
+          for _ in $(seq 1 60); do
+            if docker buildx imagetools inspect "$IMAGE:$sha_tag" >/dev/null 2>&1; then
+              found=true
+              break
+            fi
+            sleep 15
+          done
+          echo "sha_tag=$sha_tag" >> "$GITHUB_OUTPUT"
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Promote tested image
+        if: ${{ steps.src.outputs.found == 'true' }}
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          SHA_TAG: ${{ steps.src.outputs.sha_tag }}
+          VERSION: ${{ steps.tags.outputs.version }}
+          MINOR: ${{ steps.tags.outputs.minor }}
+        run: |
+          docker buildx imagetools create \
+            -t "$IMAGE:$VERSION" -t "$IMAGE:$MINOR" -t "$IMAGE:latest" \
+            "$IMAGE:$SHA_TAG"
+
+      # 回退路径：该提交没有可复用的 main 镜像时才真正构建多架构镜像。
+      - name: Build & push (fallback)
+        if: ${{ steps.src.outputs.found != 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.minor }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

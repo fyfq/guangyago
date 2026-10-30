@@ -68,6 +68,9 @@ func (s *Server) portalLinks(c *gin.Context) {
 		serverError(c, err)
 		return
 	}
+	for i := range items {
+		items[i].PosterURL = s.publicPoster(&items[i])
+	}
 	c.JSON(http.StatusOK, gin.H{"total": total, "items": items})
 }
 
@@ -100,5 +103,6 @@ func (s *Server) portalLink(c *gin.Context) {
 		serverError(c, err)
 		return
 	}
+	item.PosterURL = s.publicPoster(item)
 	c.JSON(http.StatusOK, item)
 }

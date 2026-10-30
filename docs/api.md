@@ -1,6 +1,6 @@
 # 光鸭 GO 接口文档
 
-覆盖 `internal/api` 当前注册的全部路由。最后核对 2026-10-30（新增站点品牌与运行日志下载接口）。改接口请同步更新本文（维护清单见 [docs/dev-guide.md](dev-guide.md#12-维护清单)）。
+覆盖 `internal/api` 当前注册的全部路由。最后核对 2026-10-30（新增同源海报接口）。改接口请同步更新本文（维护清单见 [docs/dev-guide.md](dev-guide.md#12-维护清单)）。
 
 ## 约定
 
@@ -37,7 +37,7 @@
 | `tg_message_id` | int64 | 推送后的 Telegram 消息 ID |
 | `created_at` / `updated_at` | RFC3339 | 时间戳 |
 
-`PublicLink`（门户最小字段集）：`id, title, original_title, year, media_type, tmdb_id, overview, genres, vote_average, runtime, poster_url, url, code, shared_at`。
+`PublicLink`（门户最小字段集）：`id, title, original_title, year, media_type, tmdb_id, overview, genres, vote_average, runtime, poster_url, url, code, shared_at`。`poster_url` 优先返回本地缓存海报的同源路径（`/posters/movie-129.jpg`），缓存不存在时才回退刮削时记录的 TMDB 远程地址；两者都是浏览器可直接加载的地址。
 
 `User`：`id, username, display_name, role(admin|operator), enabled, last_login_at, created_at`（不含密码字段）。
 
@@ -112,9 +112,11 @@
 ```json
 { "id": 42, "title": "千与千寻", "original_title": "千と千尋の神隠し", "year": 2001,
   "media_type": "movie", "tmdb_id": 129, "overview": "…", "genres": "动画 / 奇幻",
-  "vote_average": 8.5, "runtime": 125, "poster_url": "https://image.tmdb.org/…",
+  "vote_average": 8.5, "runtime": 125, "poster_url": "/posters/movie-129.jpg",
   "url": "https://www.guangyapan.com/s/…", "code": "abcd", "shared_at": "2026-10-27 16:37:34" }
 ```
+
+> 有本地缓存时 `poster_url` 是 `/posters/movie-129.jpg`；缓存缺失时才回退 `https://image.tmdb.org/…`。
 
 ### `GET /robots.txt`
 纯文本（`Cache-Control: public, max-age=3600`）。放行 `/`，屏蔽 `/admin`、`/login`、`/setup`、`/api/`，并声明 Sitemap 地址。
@@ -454,5 +456,6 @@ TMDB 预览，**只读不写库**，用于补 ID 时先核对。参数可放 JSO
 | `/login` | 登录页，未安装时自动跳 `/setup`；`?next=` 只接受 `/admin*` |
 | `/admin` | 后台（`/admin/<任意后缀>` 都回落到同一个 SPA） |
 | `/branding/:name` | 站点素材原图（PNG / JPEG / GIF / WebP）。**只有与配置里 `seo.logo_file` / `seo.icon_file` 精确相等的名字才回源**，其余一律 `404`，既不会路径穿越也暴露不出 `data` 目录里的其它文件；响应带 `Cache-Control: public, max-age=86400` |
+| `/posters/:name` | 刮削缓存的海报原图，文件名为 `<media_type>-<tmdb_id>.jpg`（如 `movie-129.jpg`），只从 `storage.poster_dir` 下读取。名字先过白名单正则 `^(movie|tv)-\d{1,12}\.jpg$`，其余一律 `404`；响应带 `Cache-Control: public, max-age=86400`。门户与 OG/JSON-LD 都优先用这个同源地址，避免访客网络打不开 `image.tmdb.org` 时海报空白 |
 
 后台页签（资源库 / 录入 / 刮削 / 推送 / 设置 / 用户管理 / SEO）不是真实 URL，切换靠前端状态，不产生路由记录。

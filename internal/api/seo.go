@@ -166,6 +166,7 @@ func (s *Server) itemStructuredData(c *gin.Context) {
 	}
 
 	baseURL := s.getBaseURL(c)
+	item.PosterURL = absolutePoster(baseURL, s.publicPoster(item))
 	data := buildMovieSchema(item, baseURL)
 	c.JSON(http.StatusOK, data)
 }
@@ -240,7 +241,9 @@ func (s *Server) headTags(c *gin.Context) string {
 		parts = append(parts, canonical)
 	}
 	if item != nil {
-		parts = append(parts, itemHeadTags(item, s.siteName(), s.getBaseURL(c)))
+		baseURL := s.getBaseURL(c)
+		item.PosterURL = absolutePoster(baseURL, s.publicPoster(item))
+		parts = append(parts, itemHeadTags(item, s.siteName(), baseURL))
 	}
 	return strings.Join(parts, "\n    ")
 }

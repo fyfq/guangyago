@@ -82,6 +82,8 @@ func (s *Server) Register(r *gin.Engine) {
 	// 素材文件只按配置里记录的文件名回源。
 	r.GET("/api/branding", s.brandingState)
 	r.GET("/branding/:name", s.brandingFile)
+	// 刮削缓存的海报同源回源：浏览器不再直连 image.tmdb.org，内网或受限网络也能显示
+	r.GET("/posters/:name", s.posterFile)
 
 	// 公开接口：健康检查、登录、资源门户、安装向导
 	r.POST("/api/auth/login", s.login)

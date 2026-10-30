@@ -115,7 +115,7 @@
 | 段 | 关键项 |
 | --- | --- |
 | `server` | `addr`、`base_path`、`public_url`（对外访问根地址，见 §6 CSRF 与 §8 域名解析）、`secure_cookie`（`*bool` 三态） |
-| `storage` | `dsn`、`data_dir`（会话密钥、海报、站点素材、运行日志都在这底下）、`poster_dir` |
+| `storage` | `dsn`、`data_dir`（会话密钥、海报、站点素材、运行日志都在这底下）、`poster_dir`、`serve_posters`（门户是否用同源 `/posters` 展示缓存海报，关闭则直连 TMDB 图床） |
 | `tmdb` | `api_key`（32 位 Key 或 `eyJ` 开头的 Read Token 自适应）、`language`、`image_base`、`poster_size`、`min_score`、`cache_poster` |
 | `telegram` | `token`、`chat_id`（`ChatID` 同时接受数字与 `@频道名`）、`enable_bot`、`silent` |
 | `netdisk` | `guangya_hosts`、`user_agent`、`cookie`、`timeout` |

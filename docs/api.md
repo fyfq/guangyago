@@ -456,6 +456,6 @@ TMDB 预览，**只读不写库**，用于补 ID 时先核对。参数可放 JSO
 | `/login` | 登录页，未安装时自动跳 `/setup`；`?next=` 只接受 `/admin*` |
 | `/admin` | 后台（`/admin/<任意后缀>` 都回落到同一个 SPA） |
 | `/branding/:name` | 站点素材原图（PNG / JPEG / GIF / WebP）。**只有与配置里 `seo.logo_file` / `seo.icon_file` 精确相等的名字才回源**，其余一律 `404`，既不会路径穿越也暴露不出 `data` 目录里的其它文件；响应带 `Cache-Control: public, max-age=86400` |
-| `/posters/:name` | 刮削缓存的海报原图，文件名为 `<media_type>-<tmdb_id>.jpg`（如 `movie-129.jpg`），只从 `storage.poster_dir` 下读取。名字先过白名单正则 `^(movie|tv)-\d{1,12}\.jpg$`，其余一律 `404`；响应带 `Cache-Control: public, max-age=86400`。门户与 OG/JSON-LD 都优先用这个同源地址，避免访客网络打不开 `image.tmdb.org` 时海报空白 |
+| `/posters/:name` | 刮削缓存的海报原图，文件名为 `<media_type>-<tmdb_id>.jpg`（如 `movie-129.jpg`），只从 `storage.poster_dir` 下读取。名字先过白名单正则 `^(movie|tv)-\d{1,12}\.jpg$`，其余一律 `404`；`storage.serve_posters: false` 时整条路由固定 `404`。响应带 `Cache-Control: public, max-age=86400`。门户与 OG/JSON-LD 都优先用这个同源地址，避免访客网络打不开 `image.tmdb.org` 时海报空白 |
 
 后台页签（资源库 / 录入 / 刮削 / 推送 / 设置 / 用户管理 / SEO）不是真实 URL，切换靠前端状态，不产生路由记录。

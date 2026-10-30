@@ -97,6 +97,35 @@ func TestPortalPosterPrefersCachedFile(t *testing.T) {
 	}
 }
 
+func TestPosterServingDisabled(t *testing.T) {
+	env := newAPIEnv(t)
+	dir := t.TempDir()
+	env.cfg.Storage.PosterDir = dir
+	env.cfg.Storage.ServePosters = false
+	if err := os.WriteFile(filepath.Join(dir, "movie-129.jpg"), []byte("\xff\xd8jpeg"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const remote = "https://image.tmdb.org/t/p/w500/abc.jpg"
+	env.seedPublishedLink("s1", &model.Link{
+		Title: "千与千寻", MediaType: model.MediaMovie, TMDBID: 129, PosterURL: remote,
+	})
+
+	rec := env.callAnon(http.MethodGet, "/api/portal/links", nil)
+	requireStatus(t, rec, http.StatusOK)
+	var body struct {
+		Items []model.PublicLink `json:"items"`
+	}
+	decodeInto(t, rec, &body)
+	if len(body.Items) != 1 {
+		t.Fatalf("条目数 = %d，期望 1", len(body.Items))
+	}
+	if got := body.Items[0].PosterURL; got != remote {
+		t.Errorf("关闭同源海报后 poster_url = %q，期望远端地址", got)
+	}
+	requireStatus(t, env.callAnon(http.MethodGet, "/posters/movie-129.jpg", nil), http.StatusNotFound)
+}
+
 func TestAbsolutePoster(t *testing.T) {
 	cases := []struct{ base, poster, want string }{
 		{"https://gy.example.com", "/posters/movie-1.jpg", "https://gy.example.com/posters/movie-1.jpg"},

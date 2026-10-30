@@ -40,8 +40,18 @@ func (s *Server) posterDir() string {
 	return strings.TrimSpace(s.cfg.Storage.PosterDir)
 }
 
+// servePosters 返回是否启用同源海报（storage.serve_posters，默认开启）。
+func (s *Server) servePosters() bool {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.cfg != nil && s.cfg.Storage.ServePosters
+}
+
 // cachedPosterHref 返回缓存海报的同源地址；文件不存在时返回空串。
 func (s *Server) cachedPosterHref(name string) string {
+	if !s.servePosters() {
+		return ""
+	}
 	dir := s.posterDir()
 	if dir == "" || name == "" {
 		return ""
@@ -76,7 +86,7 @@ func absolutePoster(baseURL, poster string) string {
 // 因此路径只会落在海报目录内的 <media>-<id>.jpg。
 func (s *Server) posterFile(c *gin.Context) {
 	name := c.Param("name")
-	if !posterNameRe.MatchString(name) {
+	if !posterNameRe.MatchString(name) || !s.servePosters() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
 		return
 	}

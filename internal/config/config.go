@@ -215,6 +215,9 @@ type StorageConfig struct {
 	DSN       string `yaml:"dsn"`
 	DataDir   string `yaml:"data_dir"`
 	PosterDir string `yaml:"poster_dir"`
+	// ServePosters 控制门户是否用同源 /posters 地址展示本地缓存海报。
+	// 关闭后回退直连 TMDB 图床，适合能直连 CDN、想省本机出口带宽的部署。
+	ServePosters bool `yaml:"serve_posters"`
 }
 
 type TMDBConfig struct {
@@ -276,9 +279,10 @@ func Default() *Config {
 	return &Config{
 		Server: ServerConfig{Addr: ":8080"},
 		Storage: StorageConfig{
-			DSN:       "data/guangya.db",
-			DataDir:   "data",
-			PosterDir: "data/posters",
+			DSN:          "data/guangya.db",
+			DataDir:      "data",
+			PosterDir:    "data/posters",
+			ServePosters: true,
 		},
 		TMDB: TMDBConfig{
 			Language:    "zh-CN",

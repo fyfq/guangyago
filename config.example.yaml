@@ -12,6 +12,9 @@ storage:
     dsn: data/guangya.db
     data_dir: data
     poster_dir: data/posters
+    # 门户是否用同源 /posters/<media>-<id>.jpg 展示本地缓存海报（需 tmdb.cache_poster 为 true）。
+    # 开启后访客不再直连 image.tmdb.org，受限网络也能显示；关闭则回退直连图床、省本机出口带宽。
+    serve_posters: true
 tmdb:
     api_key: ""  # TMDB Read Access Token（JWT）或 32 位 api_key
     language: zh-CN

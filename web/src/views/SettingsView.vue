@@ -12,6 +12,7 @@ import {
   RotateCcw,
   Zap,
   Download,
+  Globe,
 } from 'lucide-vue-next'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
@@ -25,6 +26,7 @@ const form = ref({
   chat_id: '',
   auto_push: true,
   save_to_file: true,
+  public_url: '',
   proxy_enable: false,
   proxy_addr: '',
   proxy_username: '',
@@ -128,6 +130,7 @@ async function load() {
   try {
     current.value = await api.settings()
     form.value.auto_push = current.value.auto_push
+    form.value.public_url = current.value.public_url || ''
     // 频道 ID 不是密钥，直接回显；'0' 是历史脏值，按未设置处理
     form.value.chat_id = current.value.chat_id && current.value.chat_id !== '0' ? current.value.chat_id : ''
     const p = current.value.proxy
@@ -188,12 +191,16 @@ async function save() {
   saved.value = false
   error.value = ''
   try {
+    // 地址只在真的改过时提交：没读到过配置（load 失败）就发空串会把已设的对外地址清掉
+    const loaded = current.value
+    const publicURL = form.value.public_url.trim()
     await api.saveSettings({
       tmdb_api_key: form.value.tmdb_api_key || undefined,
       tg_token: form.value.tg_token || undefined,
       chat_id: form.value.chat_id.trim() || undefined,
       auto_push: form.value.auto_push,
       save_to_file: form.value.save_to_file,
+      public_url: loaded && publicURL !== loaded.public_url ? publicURL : undefined,
       proxy: {
         enable: form.value.proxy_enable,
         addr: form.value.proxy_addr || undefined,
@@ -237,8 +244,19 @@ onMounted(load)
 
 <template>
   <div class="grid gap-5 lg:grid-cols-2">
-    <Card class="flex flex-col" title="密钥与频道" desc="留空表示不修改；填完点测试验证，再保存即时生效">
+    <Card class="flex flex-col" title="对外地址与密钥" desc="地址供反代/隧道做同源校验；密钥留空表示不修改，填完点测试验证再保存">
       <div class="flex flex-1 flex-col gap-4">
+        <div>
+          <label class="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium">
+            <Globe class="h-4 w-4" />
+            对外访问地址
+          </label>
+          <Input v-model="form.public_url" placeholder="https://gy.example.com" />
+          <p class="mt-1.5 text-xs text-[var(--color-faint)]">
+            走反向代理或 Cloudflare Tunnel 时必填：Origin 校验与站点地图都以它为准，留空则按请求 Host 推断。
+          </p>
+        </div>
+
         <div>
           <label class="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium">
             <KeyRound class="h-4 w-4" />

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { Cloud, Loader2, AlertCircle, Check, Key, Settings, User } from 'lucide-vue-next'
+import { Cloud, Loader2, AlertCircle, Check, Key, Globe, Settings, User } from 'lucide-vue-next'
 import Button from '../components/ui/Button.vue'
 import Input from '../components/ui/Input.vue'
 import { api } from '../lib/api'
@@ -16,7 +16,10 @@ const password = ref('')
 const confirmPassword = ref('')
 const displayName = ref('管理员')
 
-// 步骤 2: TMDB 配置
+// 步骤 2: 访问地址与 TMDB 配置
+// 默认取浏览器正在用的地址：走反代或隧道时这就是用户真实访问的域名，
+// 留空会让同源校验按被改写过的 Host 判断，提交类接口会一律 403。
+const publicURL = ref(location.origin)
 const tmdbApiKey = ref('')
 
 // 步骤 3: 完成
@@ -59,6 +62,7 @@ async function submit() {
       username: username.value.trim(),
       password: password.value,
       display_name: displayName.value.trim() || '管理员',
+      public_url: publicURL.value.trim(),
       tmdb_api_key: tmdbApiKey.value.trim(),
     })
     installSuccess.value = true
@@ -170,17 +174,33 @@ onMounted(async () => {
           </div>
         </div>
 
-        <!-- 步骤 2: TMDB 配置 -->
+        <!-- 步骤 2: 访问地址与 TMDB 配置 -->
         <div v-if="step === 2">
           <div class="mb-4 flex items-center gap-2">
             <Settings class="h-5 w-5 text-[var(--color-brand)]" />
-            <h2 class="text-base font-medium">配置 TMDB（可选）</h2>
+            <h2 class="text-base font-medium">配置访问地址与 TMDB</h2>
           </div>
           <p class="mb-5 text-sm text-[var(--color-muted)]">
-            用于自动刮削电影和剧集的元数据、海报等信息
+            访问地址用于反代/隧道下的同源校验，TMDB 用于自动刮削元数据与海报
           </p>
 
           <div class="space-y-4">
+            <div>
+              <label class="mb-1.5 flex items-center gap-1.5 text-sm font-medium" for="setup-public-url">
+                <Globe class="h-3.5 w-3.5" />
+                对外访问地址
+              </label>
+              <Input
+                id="setup-public-url"
+                v-model="publicURL"
+                placeholder="https://gy.example.com"
+                autocomplete="off"
+              />
+              <p class="mt-1 text-xs text-[var(--color-faint)]">
+                已按当前地址填好；用域名或隧道访问请保持这个值，本机直连可留空
+              </p>
+            </div>
+
             <div>
               <label class="mb-1.5 block text-sm font-medium" for="setup-tmdb">
                 <div class="flex items-center gap-1.5">

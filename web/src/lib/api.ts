@@ -80,6 +80,7 @@ export interface Settings {
   chat_id: string
   auto_push: boolean
   workers: number
+  public_url: string
   proxy?: ProxyState
   rate_limit?: RateLimit
   seo?: SEOState
@@ -91,6 +92,7 @@ export interface SettingsInput {
   chat_id?: string
   auto_push?: boolean
   save_to_file?: boolean
+  public_url?: string
   proxy?: {
     enable?: boolean
     addr?: string
@@ -379,6 +381,7 @@ export const api = {
     password: string
     display_name?: string
     tmdb_api_key?: string
+    public_url?: string
   }) =>
     request<{ ok: boolean; user_id: number }>('/setup', {
       method: 'POST',

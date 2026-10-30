@@ -180,6 +180,41 @@ func TestRequireSameOrigin(t *testing.T) {
 	}
 }
 
+// 反代与 Cloudflare Tunnel 会把 Host 改写成内网地址，配置了 server.public_url 就以它为准；
+// 本机直连仍按请求 Host 判断，不会被对外地址挡在门外。
+func TestRequireSameOrigin_PublicURL(t *testing.T) {
+	cases := []struct {
+		name       string
+		publicURL  string
+		host       string
+		origin     string
+		wantStatus int
+	}{
+		{"Host 被改写但命中对外地址", "https://gy.example.com", "localhost:8090", "https://gy.example.com", http.StatusOK},
+		{"对外地址已配置仍拒跨源", "https://gy.example.com", "localhost:8090", "https://evil.example", http.StatusForbidden},
+		{"本机直连不受对外地址影响", "https://gy.example.com", "localhost:8090", "http://localhost:8090", http.StatusOK},
+		{"未配置时维持按请求 Host 判断", "", "localhost:8090", "https://gy.example.com", http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{cfg: &config.Config{}}
+			s.cfg.Server.PublicURL = tc.publicURL
+			r := gin.New()
+			r.Use(s.requireSameOrigin())
+			r.POST("/x", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/x", nil)
+			req.Host = tc.host
+			req.Header.Set("Origin", tc.origin)
+			r.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Errorf("Host=%s Origin=%s 期望 %d，实际 %d", tc.host, tc.origin, tc.wantStatus, rec.Code)
+			}
+		})
+	}
+}
+
 func TestSecureCookie(t *testing.T) {
 	trueVal, falseVal := true, false
 	cases := []struct {

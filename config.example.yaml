@@ -1,6 +1,10 @@
 server:
     addr: :8090
     base_path: ""
+    # 用户实际访问的根地址，例如 https://gy.example.com。走反向代理 / Cloudflare Tunnel
+    # 时必须填：Origin 校验与站点地图都以它为准，否则 Host 被改写会导致提交类接口 403、
+    # canonical 指向内网地址。留空则按请求 Host 推断（本机直连 http://localhost:8090 够用）。
+    # public_url: https://gy.example.com
     # 会话 Cookie 是否加 Secure 标记。省略此键时按请求 TLS 自动判断；
     # 反代在边缘终止 TLS 时（本机 http://），需要显式 true；纯本地 http 调试设为 false。
     # secure_cookie: true

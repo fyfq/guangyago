@@ -237,3 +237,32 @@ func TestSettingsSiteSubtitle(t *testing.T) {
 		}
 	}
 }
+
+// 反代/隧道下这个地址决定提交类接口能不能过同源校验，必须能改、能落盘、能回显。
+func TestSettingsPublicURL(t *testing.T) {
+	e := newAPIEnv(t)
+	requireStatus(t, e.call(http.MethodPost, "/api/settings", map[string]any{
+		"public_url":   "https://gy.example.com/",
+		"save_to_file": true,
+	}), http.StatusOK)
+
+	saved, err := config.Load(e.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Server.PublicURL != "https://gy.example.com" {
+		t.Fatalf("对外地址未持久化或未去掉结尾斜杠: %q", saved.Server.PublicURL)
+	}
+
+	rec := e.call(http.MethodGet, "/api/settings", nil)
+	requireStatus(t, rec, http.StatusOK)
+	var got struct {
+		PublicURL string `json:"public_url"`
+	}
+	decodeInto(t, rec, &got)
+	if got.PublicURL != "https://gy.example.com" {
+		t.Fatalf("GET /api/settings 未回显对外地址: %+v", got)
+	}
+
+	requireStatus(t, e.call(http.MethodPost, "/api/settings", map[string]any{"public_url": "gy.example.com"}), http.StatusBadRequest)
+}

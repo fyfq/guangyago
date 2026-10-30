@@ -304,22 +304,35 @@ func (s *Server) secureCookie(c *gin.Context) bool {
 // validOrigin 用 Origin / Referer 兜底校验，防止 SameSite=Lax 之外场景下的跨站 POST。
 // 请求不带 Origin 且没有 Referer 时（同源 curl / 内部工具）视为通过，避免误伤。
 func (s *Server) validOrigin(c *gin.Context) bool {
-	host := c.Request.Host
+	var raw string
 	if origin := strings.TrimSpace(c.GetHeader("Origin")); origin != "" {
-		u, err := url.Parse(origin)
-		if err != nil || !strings.EqualFold(u.Host, host) {
-			return false
-		}
+		raw = origin
+	} else if ref := strings.TrimSpace(c.GetHeader("Referer")); ref != "" {
+		raw = ref
+	} else {
 		return true
 	}
-	if ref := strings.TrimSpace(c.GetHeader("Referer")); ref != "" {
-		u, err := url.Parse(ref)
-		if err != nil || !strings.EqualFold(u.Host, host) {
-			return false
-		}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(u.Host, c.Request.Host) {
 		return true
 	}
-	return true
+	// 反代或隧道改写 Host 头时请求 Host 对不上，改以配置的对外地址为准；
+	// 本机直连（localhost:8090）仍走上面的分支，不会被这条规则挡在外面。
+	publicHost := s.publicHost()
+	return publicHost != "" && strings.EqualFold(u.Host, publicHost)
+}
+
+// publicHost 返回配置的对外访问主机名，未配置时为空串。
+func (s *Server) publicHost() string {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	if s.cfg == nil {
+		return ""
+	}
+	return s.cfg.Server.PublicHost()
 }
 
 // requireSameOrigin 拦截所有状态变更接口（POST / PUT / DELETE / PATCH）的跨站请求。

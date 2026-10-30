@@ -62,16 +62,17 @@
 ```
 
 ### `POST /api/setup`
-首次安装：创建管理员，可同时写入 TMDB Key。**用户表非空时固定拒绝**，无自恢复入口，请在页面提示下走「用户管理」。
+首次安装：创建管理员，可同时写入 TMDB Key 与对外访问地址。**用户表非空时固定拒绝**，无自恢复入口，请在页面提示下走「用户管理」。
 
 | 字段 | 必填 | 约束 |
 | --- | --- | --- |
 | `username` | 是 | `^[a-zA-Z0-9_.-]{3,32}$` |
 | `password` | 是 | 8–128 字节、非常见弱口令、字符类别≥2 |
 | `display_name` | 否 | ≤40 字节，默认「管理员」 |
+| `public_url` | 否 | 对外访问根地址，写入 `server.public_url`；非空时必须以 `http://` 或 `https://` 开头并带主机名，尾部 `/` 会被去掉。向导默认回填 `location.origin`，反代/隧道场景务必保留 |
 | `tmdb_api_key` | 否 | 非空则写入 `config.yaml` 并热加载 |
 
-→ `200 {"ok":true,"user_id":1}`；已安装 → `403 {"error":"系统已安装，请勿重复操作"}`；校验失败 → `400`。
+→ `200 {"ok":true,"user_id":1}`；已安装 → `403 {"error":"系统已安装，请勿重复操作"}`；校验失败 → `400 {"error":"对外访问地址需要以 http:// 或 https:// 开头"}` 等。
 
 ### `POST /api/auth/login`
 
@@ -346,6 +347,7 @@ TMDB 预览，**只读不写库**，用于补 ID 时先核对。参数可放 JSO
 {
   "tmdb_configured": true, "telegram_configured": true,
   "chat_id": "@realguangya", "auto_push": true, "workers": 2,
+  "public_url": "https://gy.example.com",
   "proxy": { "enable": true, "addr": "host:7890", "username": "", "has_password": false },
   "rate_limit": {
     "tmdb":     { "enable": true, "per_second": 4, "burst": 4, "shared_credentials": false },
@@ -365,6 +367,7 @@ TMDB 预览，**只读不写库**，用于补 ID 时先核对。参数可放 JSO
   "tg_token": "...",            // 空串忽略
   "chat_id": "@channel",        // 空串忽略；支持数字 ID 或 @频道名
   "auto_push": true,            // 省略则不改
+  "public_url": "https://gy.example.com",  // 省略则不改；空串清空（回到按请求 Host 判断）
   "save_to_file": true,         // 是否写回 config.yaml（否则只活到本次进程）
   "proxy": { "enable": true, "addr": "host:7890", "username": "", "password": "" },
   "rate_limit": {
@@ -378,7 +381,8 @@ TMDB 预览，**只读不写库**，用于补 ID 时先核对。参数可放 JSO
 
 - `proxy.*` 与 `rate_limit.*` 都是可选子对象，缺字段不改动；`burst` 夹在 1–100。
 - **`seo` 用指针区分「不改」和「清空」**：传 `google_verification: ""` 会撤掉首页验证标签；`base_url` 非空时必须以 `http://` 或 `https://` 开头，且尾部 `/` 会被去掉。
-- 校验失败：`400 {"error":"Google 站点验证码格式不正确"}` / `{"error":"站点根地址需要以 http:// 或 https:// 开头"}`；`save_to_file` 写盘失败 → `500`。
+- **`public_url` 同理是顶层指针**：省略不改，传 `""` 清空并回到按请求 `Host` 推断；非空时必须带 `http://`/`https://`，尾部 `/` 会被去掉。它是同源校验与站点地图（`seo.base_url` 缺省时）的基准地址，反代/Cloudflare Tunnel 下必填。
+- 校验失败：`400 {"error":"Google 站点验证码格式不正确"}` / `{"error":"站点根地址需要以 http:// 或 https:// 开头"}` / `{"error":"对外访问地址需要以 http:// 或 https:// 开头"}`；`save_to_file` 写盘失败 → `500`。
 - 成功 → `{"ok":true}`，随后进程内配置热更新（重建 TMDB/Telegram 客户端并重启 Bot）。
 
 ### `POST /api/settings/test`

@@ -100,7 +100,7 @@
 - 会话：32 字节随机令牌下发为 Cookie `gy_session`（HttpOnly、SameSite=Lax、Path=/、7 天），库里只存 HMAC-SHA256 摘要（密钥来自 `data/session.key`）。登出、改密、被管理员重置密码、账号停用都会立即让旧会话失效。
 - `Secure` 标记：默认按 TLS / `X-Forwarded-Proto` 判定，可用 `server.secure_cookie` 强制 true/false（纯 HTTP 内网部署写 `false`）。
 - 登录锁定：按「真实 IP」和「用户名（小写）」两个维度，连续 5 次失败锁 5 分钟，状态落 `login_attempts` 表（重启不丢），进程内 30 秒缓存，命中回 `429`。
-- CSRF：全局 `requireSameOrigin` 拦截所有 POST/PUT/PATCH/DELETE 的跨站请求（无 Origin 且无 Referer 时放行，兼容 curl）。
+- CSRF：全局 `requireSameOrigin` 拦截所有 POST/PUT/PATCH/DELETE 的跨站请求（无 Origin 且无 Referer 时放行，兼容 curl）。比对基准是请求 `Host`；反代或 Cloudflare Tunnel 会改写 Host，这时浏览器带的 `Origin` 永远对不上，**必须配 `server.public_url`**——命中对外地址同样放行，本机直连（`localhost:8090`）仍按请求 Host 走，不受影响。
 - 角色：`admin` 独占 `/api/settings*`、`/api/users*`；`operator` 连入口都看不到（`adminOnly` 标签按 `me.role` 过滤）。最后一个启用的管理员不允许降级或删除（`store.ErrLastAdmin`）。
 - 响应头：`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Permissions-Policy`、CSP（`script-src 'self'`、`connect-src 'self'`，所以前端不能引 CDN、不能写内联脚本）、仅 TLS 直连时下发 HSTS、`/api/*` 一律 `Cache-Control: no-store`。
 - 运行日志：访问日志只记 `method`/`path`（取 `c.FullPath()` 的路由模式，不是真实 URL，所以查询串里的提取码不会落盘）/`status`/`latency_ms`/`bytes`/`ip`。登录、下载日志这类敏感动作会带 `username`，因此日志文件本身按 0600 创建、目录 0750，只有管理员能通过 `GET /api/logs/download` 取走，且路径是启动时注入的固定值、不接受客户端参数。**新增日志字段时不要把密钥、Cookie 或提取码写进去**。
@@ -114,7 +114,7 @@
 
 | 段 | 关键项 |
 | --- | --- |
-| `server` | `addr`、`base_path`、`secure_cookie`（`*bool` 三态） |
+| `server` | `addr`、`base_path`、`public_url`（对外访问根地址，见 §6 CSRF 与 §8 域名解析）、`secure_cookie`（`*bool` 三态） |
 | `storage` | `dsn`、`data_dir`（会话密钥、海报、站点素材、运行日志都在这底下）、`poster_dir` |
 | `tmdb` | `api_key`（32 位 Key 或 `eyJ` 开头的 Read Token 自适应）、`language`、`image_base`、`poster_size`、`min_score`、`cache_poster` |
 | `telegram` | `token`、`chat_id`（`ChatID` 同时接受数字与 `@频道名`）、`enable_bot`、`silent` |
@@ -137,7 +137,7 @@
 - `robots.txt` / `sitemap.xml` / `GET /api/structured-data[/:id]` 由服务端动态生成（`internal/api/seo.go`）。三者的可见范围都走 `store.publicWhere`（刮削成功即收录），不另判推送状态。
 - sitemap 数据来自 `store.Sitemap(offset, limit)`（只取 `id` + `updated_at`，比 `ListPublic` 轻）。单文件上限 `maxSitemapURLs = 5000`：超出后 `/sitemap.xml` 返回 `sitemapindex`，分片回到同一 handler 的 `?part=<n>`，**不会再静默丢掉最老的记录**。`lastmod` 用 `updated_at`（重刮/改状态都会刷新），首页条目的 `lastmod` 用全站 `MAX(updated_at)`。`robots.txt` 与 `sitemap.xml` 都带 `Cache-Control: public, max-age=3600`。
 - `updated_at` 是 DATETIME 列，SQL 里一律 `CAST(... AS TEXT)` 再扫进 `string`，避免驱动按时间类型解析时踩格式差异。
-- 域名解析顺序：`seo.base_url` 优先，否则按请求 TLS 与 `Host` 推断。**放在反向代理或多域名环境里必须固定 `base_url`**，否则 sitemap 会写成内网地址。
+- 域名解析顺序：`seo.base_url` 优先 → `server.public_url` → 按请求 TLS 与 `Host` 推断。**放在反向代理或多域名环境里必须固定 `server.public_url`**（安装向导第 2 步默认带上浏览器正在用的地址，设置页可改），否则 sitemap 会写成内网地址、同源校验也会失败。
 - `WriteIndex` 在返回首页 HTML 时把 `<meta name="google-site-verification">`、`<link rel="canonical">` 和站点图标 `<link rel="icon">` 注入 `<head>`，并把模板里的 `{{SITE_NAME}}` 换成 `seo.site_name`（先 `html.EscapeString`，否则后台填一个 `"><script>` 就能闭合 `<title>` 往 head 里塞标签）；请求带 `?id=<n>` 且记录已收录（刮削成功）时，再注入该资源自己的 `title` / `description` / `og:` / `twitter:` / JSON-LD，并删掉模板里的站点级同类标签，避免同名标签重复。必须走服务端注入：CSP 拦内联脚本，爬虫也读不到前端 JS 补的标签。`/admin*`、`/login`、`/setup` 不生成 canonical。
 - 门户把页面状态绑到查询串（`?id`/`?q`/`?media_type`/`?year`/`?sort`），`PortalView` 挂载时 `applyURL()` 回填、`popstate` 时重新回填：打开详情用 `pushState`（返回键先关详情），改筛选只 `replaceState`（不塞历史）。所以 sitemap 里的 `/?id=<n>` 是能被爬虫打开的真实页面，而不是一串回落到空壳首页的 URL。
 - 验证码只允许 `^[A-Za-z0-9_-]{10,120}$`，不合法直接 400——这是防 HTML 注入的硬约束，放宽前想清楚。

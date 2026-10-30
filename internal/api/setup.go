@@ -28,6 +28,9 @@ type setupRequest struct {
 	Password    string `json:"password"`
 	DisplayName string `json:"display_name"`
 	TMDBAPIKey  string `json:"tmdb_api_key"`
+	// PublicURL 是用户实际访问站点的根地址。反代/隧道会改写 Host，留空则同源校验与
+	// sitemap 都会以内网地址为准，所以向导里默认带上浏览器正在用的地址。
+	PublicURL string `json:"public_url"`
 }
 
 // setup 完成初始安装，创建管理员账号
@@ -65,6 +68,11 @@ func (s *Server) setup(c *gin.Context) {
 	if req.DisplayName == "" {
 		req.DisplayName = "管理员"
 	}
+	publicURL, ok := config.NormalizePublicURL(req.PublicURL)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "对外访问地址需要以 http:// 或 https:// 开头"})
+		return
+	}
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
@@ -83,16 +91,22 @@ func (s *Server) setup(c *gin.Context) {
 		return
 	}
 
-	slog.Info("安装完成，管理员已创建", "username", u.Username)
+	slog.Info("安装完成，管理员已创建", "username", u.Username, "public_url", publicURL)
 
-	// 如果提供了 TMDB API Key，保存到配置
-	if strings.TrimSpace(req.TMDBAPIKey) != "" && s.cfg != nil && s.configPath != "" {
+	// TMDB Key 与对外访问地址都写进配置文件，省掉手工编辑
+	tmdbKey := strings.TrimSpace(req.TMDBAPIKey)
+	if (tmdbKey != "" || publicURL != "") && s.cfg != nil && s.configPath != "" {
 		s.configMu.Lock()
-		s.cfg.TMDB.APIKey = req.TMDBAPIKey
+		if tmdbKey != "" {
+			s.cfg.TMDB.APIKey = tmdbKey
+		}
+		if publicURL != "" {
+			s.cfg.Server.PublicURL = publicURL
+		}
 		saveErr := config.Save(s.configPath, s.cfg)
 		s.configMu.Unlock()
 		if saveErr != nil {
-			slog.Warn("保存 TMDB API Key 失败", "err", saveErr)
+			slog.Warn("保存安装配置失败", "err", saveErr)
 		} else if s.reload != nil {
 			s.reload(s.cfg)
 		}

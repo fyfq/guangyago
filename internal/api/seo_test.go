@@ -360,6 +360,16 @@ func TestGetBaseURL(t *testing.T) {
 	if got := s.getBaseURL(c); got != "https://fixed.example.com" {
 		t.Errorf("固定 base_url 应优先并去掉尾部斜杠: %q", got)
 	}
+
+	// server.public_url 是第二优先级：没填 base_url 时用它，填了就让位
+	s.cfg = &config.Config{Server: config.ServerConfig{PublicURL: "https://gy.example.com"}}
+	if got := s.getBaseURL(c); got != "https://gy.example.com" {
+		t.Errorf("未固定 base_url 时应回落到对外地址: %q", got)
+	}
+	s.cfg.SEO.BaseURL = "https://seo.example.com"
+	if got := s.getBaseURL(c); got != "https://seo.example.com" {
+		t.Errorf("base_url 应优先于对外地址: %q", got)
+	}
 }
 
 // TestBuildItemGraph_Breadcrumb 覆盖 Google 面包屑富结果需要的最小节点集合。

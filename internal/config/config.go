@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -175,9 +176,39 @@ const (
 type ServerConfig struct {
 	Addr     string `yaml:"addr"`
 	BasePath string `yaml:"base_path"`
+	// PublicURL 是用户实际访问站点的根地址（如 https://gy.example.com）。
+	// 反向代理或 Cloudflare Tunnel 会改写 Host 头，此时按请求头推断既过不了同源校验、
+	// 也会把 sitemap 写成内网地址，所以显式配置它以哪个地址为准。留空则退回按请求 Host 判断。
+	PublicURL string `yaml:"public_url"`
 	// SecureCookie 强制给会话 Cookie 加 Secure 标记。反代或纯 HTTP 场景可显式设为 false；
 	// 未设置时（zero value）按请求 TLS / X-Forwarded-Proto 判定。
 	SecureCookie *bool `yaml:"secure_cookie,omitempty"`
+}
+
+// PublicHost 返回 PublicURL 的主机名（含端口、小写）；未配置或解析失败返回空串。
+func (c *ServerConfig) PublicHost() string {
+	if c == nil {
+		return ""
+	}
+	u, err := url.Parse(strings.TrimSpace(c.PublicURL))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Host)
+}
+
+// NormalizePublicURL 校验并归一化对外访问地址：允许留空（按请求头推断），
+// 填了必须带 http/https 协议与主机名，并去掉结尾多余的斜杠。ok=false 表示格式不合法。
+func NormalizePublicURL(v string) (string, bool) {
+	s := strings.TrimRight(strings.TrimSpace(v), "/")
+	if s == "" {
+		return "", true
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", false
+	}
+	return s, true
 }
 
 type StorageConfig struct {

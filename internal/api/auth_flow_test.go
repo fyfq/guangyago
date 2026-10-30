@@ -34,6 +34,7 @@ func TestSetupFlow(t *testing.T) {
 		{"用户名过短", map[string]any{"username": "ab", "password": "Abcdef12!"}},
 		{"弱密码", map[string]any{"username": "root", "password": "short"}},
 		{"显示名过长", map[string]any{"username": "root", "password": "Abcdef12!", "display_name": strings.Repeat("长", 41)}},
+		{"对外地址缺协议", map[string]any{"username": "root", "password": "Abcdef12!", "public_url": "gy.example.com"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -44,6 +45,7 @@ func TestSetupFlow(t *testing.T) {
 	rec = e.callAnon(http.MethodPost, "/api/setup", map[string]any{
 		"username":     "root",
 		"password":     "Abcdef12!",
+		"public_url":   "https://gy.example.com/",
 		"tmdb_api_key": "tmdb-key",
 	})
 	requireStatus(t, rec, http.StatusOK)
@@ -65,6 +67,9 @@ func TestSetupFlow(t *testing.T) {
 	}
 	if e.cfg.TMDB.APIKey != "tmdb-key" {
 		t.Errorf("TMDB Key 未写入配置: %q", e.cfg.TMDB.APIKey)
+	}
+	if e.cfg.Server.PublicURL != "https://gy.example.com" {
+		t.Errorf("对外访问地址未写入配置或未去掉结尾斜杠: %q", e.cfg.Server.PublicURL)
 	}
 	if e.reloads != 1 {
 		t.Errorf("保存密钥后应触发一次组件重建，实际 %d", e.reloads)

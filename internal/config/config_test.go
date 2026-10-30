@@ -157,4 +157,46 @@ func TestSave_Roundtrip(t *testing.T) {
 	}
 }
 
+// 反代/隧道下这个地址既管同源校验也管站点地图，得先挡住少协议、少主机名的写法。
+func TestNormalizePublicURL(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     string
+		want   string
+		wantOK bool
+	}{
+		{"留空表示按请求头推断", "", "", true},
+		{"去掉首尾空白与结尾斜杠", "  https://gy.example.com/  ", "https://gy.example.com", true},
+		{"本机 http 直连也允许", "http://127.0.0.1:8090", "http://127.0.0.1:8090", true},
+		{"缺协议", "gy.example.com", "", false},
+		{"非 http 协议", "ftp://gy.example.com", "", false},
+		{"只有协议没有主机名", "https://", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := NormalizePublicURL(c.in)
+			if got != c.want || ok != c.wantOK {
+				t.Errorf("NormalizePublicURL(%q) = (%q, %v)，期望 (%q, %v)", c.in, got, ok, c.want, c.wantOK)
+			}
+		})
+	}
+}
+
+func TestPublicHost(t *testing.T) {
+	cases := []struct{ name, url, want string }{
+		{"主机名统一小写", "https://GY.example.com", "gy.example.com"},
+		{"保留端口", "http://localhost:8090", "localhost:8090"},
+		{"带路径只取主机名", "https://gy.example.com/app", "gy.example.com"},
+		{"未配置", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := ServerConfig{PublicURL: c.url}
+			if got := cfg.PublicHost(); got != c.want {
+				t.Errorf("PublicHost(%q) = %q，期望 %q", c.url, got, c.want)
+			}
+		})
+	}
+}
+
 func boolPtr(v bool) *bool { return &v }

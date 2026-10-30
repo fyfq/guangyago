@@ -170,14 +170,20 @@ func (s *Server) itemStructuredData(c *gin.Context) {
 	c.JSON(http.StatusOK, data)
 }
 
-// getBaseURL 从请求中推断站点基础 URL；配置里固定了 seo.base_url 时优先使用它。
+// getBaseURL 返回站点基础 URL：seo.base_url 优先，其次 server.public_url（对外访问地址），
+// 两者都没配置时才从请求头推断——反代改写 Host 时推断结果会是内网地址。
 func (s *Server) getBaseURL(c *gin.Context) string {
 	s.configMu.RLock()
 	fixed := ""
+	public := ""
 	if s.cfg != nil {
 		fixed = strings.TrimSpace(s.cfg.SEO.BaseURL)
+		public = strings.TrimSpace(s.cfg.Server.PublicURL)
 	}
 	s.configMu.RUnlock()
+	if fixed == "" {
+		fixed = public
+	}
 	if fixed != "" {
 		return strings.TrimRight(fixed, "/")
 	}

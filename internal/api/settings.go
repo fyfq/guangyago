@@ -47,6 +47,7 @@ func (s *Server) settings(c *gin.Context) {
 	seoBaseURL := cfg.SEO.BaseURL
 	siteName := cfg.SEO.SiteName
 	siteSubtitle := cfg.SEO.SiteSubtitle
+	publicURL := cfg.Server.PublicURL
 	s.configMu.RUnlock()
 
 	c.JSON(http.StatusOK, gin.H{
@@ -55,6 +56,7 @@ func (s *Server) settings(c *gin.Context) {
 		"chat_id":             chatID,
 		"auto_push":           autoPush,
 		"workers":             workers,
+		"public_url":          publicURL,
 		"proxy": gin.H{
 			"enable":       proxyEnable,
 			"addr":         proxyAddr,
@@ -95,6 +97,8 @@ type settingsRequest struct {
 	ChatID     string `json:"chat_id"`
 	AutoPush   *bool  `json:"auto_push"`
 	SaveToFile bool   `json:"save_to_file"`
+	// PublicURL 是对外访问根地址；指针区分「没传」与「传空串清空」。
+	PublicURL *string `json:"public_url"`
 	Proxy      *struct {
 		Enable   *bool  `json:"enable"`
 		Addr     string `json:"addr"`
@@ -154,6 +158,15 @@ func (s *Server) updateSettings(c *gin.Context) {
 	}
 	if req.AutoPush != nil {
 		cfg.Pipeline.AutoPush = *req.AutoPush
+	}
+	if req.PublicURL != nil {
+		publicURL, ok := config.NormalizePublicURL(*req.PublicURL)
+		if !ok {
+			s.configMu.Unlock()
+			c.JSON(http.StatusBadRequest, gin.H{"error": "对外访问地址需要以 http:// 或 https:// 开头"})
+			return
+		}
+		cfg.Server.PublicURL = publicURL
 	}
 	if p := req.Proxy; p != nil {
 		if p.Enable != nil {

@@ -467,6 +467,8 @@ func (s *Server) WriteIndex(c *gin.Context, fsys fs.FS) {
 		s.WriteNotFound(c, fsys)
 		return
 	}
+	// 只有真正返回门户首页时才计入 PV；404 与后台入口都不统计
+	s.recordPortalVisit(c)
 	s.writeSPAIndex(c, fsys, http.StatusOK, s.headTags(c, item))
 }
 

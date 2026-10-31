@@ -99,7 +99,7 @@ type settingsRequest struct {
 	SaveToFile bool   `json:"save_to_file"`
 	// PublicURL 是对外访问根地址；指针区分「没传」与「传空串清空」。
 	PublicURL *string `json:"public_url"`
-	Proxy      *struct {
+	Proxy     *struct {
 		Enable   *bool  `json:"enable"`
 		Addr     string `json:"addr"`
 		Username string `json:"username"`

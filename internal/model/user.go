@@ -45,10 +45,15 @@ type PublicLink struct {
 }
 
 // PublicShare 是门户详情里的一条分享链接。
+// 浏览/复制/打开次数只在后台统计详情里填充。
 type PublicShare struct {
+	ID       int64  `json:"id"`
 	URL      string `json:"url"`
 	Code     string `json:"code"`
 	SharedAt string `json:"shared_at"`
+	Browses  int64  `json:"browses,omitempty"`
+	Copies   int64  `json:"copies,omitempty"`
+	Opens    int64  `json:"opens,omitempty"`
 }
 
 // PublicFilter 是门户列表的查询条件。

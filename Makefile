@@ -28,9 +28,9 @@ vet:
 staticcheck:
 	$(BIN_DIR)/staticcheck ./...
 
-# gosec 默认会对 _test.go 报噪音，只在生产代码上跑
+# gosec 默认会对 _test.go 报噪音，只在生产代码上跑；scratch/ 是本地验证脚本，不入库也不进 CI
 gosec:
-	$(BIN_DIR)/gosec -exclude=G104,G304 ./...
+	$(BIN_DIR)/gosec -exclude=G104,G304 -exclude-dir=scratch ./...
 
 # lint 是 CI 的门禁入口：任一失败即退出非 0
 lint: vet staticcheck gosec web-lint

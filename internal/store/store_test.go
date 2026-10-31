@@ -72,8 +72,8 @@ func TestOpen_CreatesDirAndTables(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT value FROM schema_meta WHERE key='version'`).Scan(&v); err != nil {
 		t.Fatalf("读 schema_meta.version 失败: %v", err)
 	}
-	if v != "2" {
-		t.Errorf("schema_meta.version 期望 '2'，实际 %q", v)
+	if v != "4" {
+		t.Errorf("schema_meta.version 期望 '4'，实际 %q", v)
 	}
 
 	// PRAGMA foreign_keys 应开启
@@ -182,6 +182,63 @@ func TestMigrate_AddsReleaseDateToLegacyDB(t *testing.T) {
 	}
 	if l.ReleaseDate != "" {
 		t.Errorf("存量记录 release_date 应为空，实际 %q", l.ReleaseDate)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path); err != nil {
+		t.Fatalf("重复迁移不应失败: %v", err)
+	}
+}
+
+// v3 的 resource_opens 迁移到 v4 的 resource_events 时，存量次数要归到「打开」，
+// 旧表删除，重复启动不报错。
+func TestMigrate_ResourceOpensToEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.sqlite")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE resource_opens (
+		link_id INTEGER NOT NULL,
+		day     TEXT NOT NULL,
+		opens   INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (link_id, day)
+	)`); err != nil {
+		t.Fatalf("建旧统计表失败: %v", err)
+	}
+	if _, err := raw.Exec(`INSERT INTO resource_opens(link_id, day, opens) VALUES(49, '2026-10-31', 7)`); err != nil {
+		t.Fatalf("写入旧统计失败: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("迁移 v3 库失败: %v", err)
+	}
+	var browses, copies, opens int
+	if err := s.db.QueryRow(
+		`SELECT
+			COALESCE(SUM(CASE WHEN action = 'browse' THEN hits END), 0),
+			COALESCE(SUM(CASE WHEN action = 'copy' THEN hits END), 0),
+			COALESCE(SUM(CASE WHEN action = 'open' THEN hits END), 0)
+		 FROM resource_events WHERE link_id = 49`).
+		Scan(&browses, &copies, &opens); err != nil {
+		t.Fatalf("读迁移结果失败: %v", err)
+	}
+	if browses != 0 || copies != 0 || opens != 7 {
+		t.Errorf("迁移后 浏览/复制/打开 = %d/%d/%d, 期望 0/0/7", browses, copies, opens)
+	}
+	var legacy int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'resource_opens'`).
+		Scan(&legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy != 0 {
+		t.Error("迁移后不应保留 resource_opens 表")
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)

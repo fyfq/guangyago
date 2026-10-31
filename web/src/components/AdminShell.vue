@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch, type Component } from 'vue'
 import {
+  BarChart3,
   Cloud,
   Globe,
   Library,
@@ -17,12 +18,13 @@ import PushView from '../views/PushView.vue'
 import SettingsView from '../views/SettingsView.vue'
 import UsersView from '../views/UsersView.vue'
 import SEOView from '../views/SEOView.vue'
+import StatsView from '../views/StatsView.vue'
 import Card from './ui/Card.vue'
 import Button from './ui/Button.vue'
 import { api, ApiError, type User } from '../lib/api'
 import { branding } from '../lib/branding'
 
-type Tab = 'import' | 'scrape' | 'library' | 'push' | 'settings' | 'users' | 'seo'
+type Tab = 'import' | 'scrape' | 'library' | 'push' | 'settings' | 'users' | 'seo' | 'stats'
 
 const stats = ref<Record<string, number>>({})
 const initialStatus = ref('')
@@ -42,6 +44,7 @@ const allTabs: { key: Tab; label: string; step?: number; icon?: Component; admin
   { key: 'settings', label: '设置', icon: SettingsIcon, adminOnly: true },
   { key: 'users', label: '用户管理', icon: UsersRound, adminOnly: true },
   { key: 'seo', label: 'SEO', icon: Globe, adminOnly: true },
+  { key: 'stats', label: '统计', icon: BarChart3, adminOnly: true },
 ]
 
 const tabs = computed(() => allTabs.filter((t) => !t.adminOnly || me.value?.role === 'admin'))
@@ -275,6 +278,7 @@ watch(() => branding.site_name, syncTitle)
       />
       <SettingsView v-else-if="tab === 'settings' && isAdmin" />
       <SEOView v-else-if="tab === 'seo' && isAdmin" />
+      <StatsView v-else-if="tab === 'stats' && isAdmin" />
       <UsersView v-else-if="tab === 'users' && me" :me="me" />
     </main>
   </div>

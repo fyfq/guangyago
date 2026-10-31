@@ -93,6 +93,9 @@ func (s *Server) Register(r *gin.Engine) {
 	{
 		portal.GET("/links", s.portalLinks)
 		portal.GET("/link/:id", s.portalLink)
+		portal.POST("/browse/:id", s.portalBrowse)
+		portal.POST("/copy/:id", s.portalCopy)
+		portal.POST("/open/:id", s.portalOpen)
 		portal.GET("/stats", s.portalStats)
 	}
 
@@ -129,6 +132,8 @@ func (s *Server) Register(r *gin.Engine) {
 			admin.POST("/settings", s.updateSettings)
 			admin.POST("/settings/test", s.testConfig)
 			admin.GET("/logs/download", s.downloadLog)
+			admin.GET("/stats/portal", s.portalTraffic)
+			admin.GET("/stats/portal/link/:id", s.portalTrafficLink)
 
 			admin.POST("/branding", s.brandingUpload)
 			admin.DELETE("/branding", s.brandingClear)

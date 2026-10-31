@@ -57,13 +57,18 @@ func (s *Store) Close() error { return s.db.Close() }
 // schemaVersion 是当前代码期望的数据库结构版本，仅用于诊断；
 // 迁移语句本身是幂等的（IF NOT EXISTS / INSERT OR IGNORE / 先查后加列）。
 // v2：links 增加 release_date（TMDB 上映/首播日期），供门户按上映时间排序。
-const schemaVersion = 2
+// v3：新增门户访问/点击统计表 portal_visits、resource_opens。
+// v4：resource_opens 改为 resource_events，按浏览/复制/打开三类事件分开计数。
+const schemaVersion = 4
 
 func (s *Store) migrate() error {
 	if _, err := s.db.Exec(migrateSQL); err != nil {
 		return fmt.Errorf("迁移失败: %w", err)
 	}
 	if err := s.ensureReleaseDateColumn(); err != nil {
+		return err
+	}
+	if err := s.ensureResourceEvents(); err != nil {
 		return err
 	}
 	if _, err := s.db.Exec(`INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)`, fmt.Sprint(schemaVersion)); err != nil {
@@ -88,6 +93,37 @@ func (s *Store) ensureReleaseDateColumn() error {
 		return fmt.Errorf("添加 release_date 列失败: %w", err)
 	}
 	slog.Info("schema 迁移：links 已补 release_date 列", "schema_version", schemaVersion)
+	return nil
+}
+
+// ensureResourceEvents 把 v3 的 resource_opens 迁移成带 action 维度的 resource_events，
+// 存量记录全部归为「打开」。旧表迁移完即删除，新库没有这张表时直接跳过。
+func (s *Store) ensureResourceEvents() error {
+	var exists int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'resource_opens'`).Scan(&exists); err != nil {
+		return fmt.Errorf("检查 resource_opens 表失败: %w", err)
+	}
+	if exists == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("开始统计迁移事务失败: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(
+		`INSERT OR IGNORE INTO resource_events(link_id, day, action, hits)
+		 SELECT link_id, day, '` + model.ActionOpen + `', opens FROM resource_opens`); err != nil {
+		return fmt.Errorf("迁移资源打开记录失败: %w", err)
+	}
+	if _, err := tx.Exec(`DROP TABLE resource_opens`); err != nil {
+		return fmt.Errorf("删除旧统计表失败: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交统计迁移失败: %w", err)
+	}
+	slog.Info("schema 迁移：resource_opens 已合并为 resource_events", "schema_version", schemaVersion)
 	return nil
 }
 
@@ -155,6 +191,25 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+
+-- 门户访问：按「天 + 访客摘要」聚合，UV 就是当天行数，PV 是 views 之和。
+CREATE TABLE IF NOT EXISTS portal_visits (
+	day          TEXT NOT NULL,
+	visitor_hash TEXT NOT NULL,
+	views        INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (day, visitor_hash)
+);
+
+-- 资源互动：按「分享 + 天 + 动作」聚合，动作分浏览（海报进详情）/复制/打开。
+-- 保留期外的行由启动清理删除。
+CREATE TABLE IF NOT EXISTS resource_events (
+	link_id INTEGER NOT NULL,
+	day     TEXT NOT NULL,
+	action  TEXT NOT NULL,
+	hits    INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (link_id, day, action)
+);
+CREATE INDEX IF NOT EXISTS idx_resource_events_day ON resource_events(day);
 `
 
 // likeEscape 把用户输入里的 LIKE 通配符转义，防止搜索关键词以 % 或 _ 操控匹配范围。

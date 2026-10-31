@@ -152,7 +152,7 @@ func (s *Store) publicLinks(groups []string) (map[string][]model.PublicShare, er
 		args[i] = g
 	}
 	rows, err := s.db.Query(
-		`SELECT `+publicGroupExpr+`, url, code, shared_at FROM links
+		`SELECT `+publicGroupExpr+`, id, url, code, shared_at FROM links
 		 WHERE `+publicWhere+` AND `+publicGroupExpr+` IN (`+placeholders+`)
 		 ORDER BY CASE WHEN shared_at = '' THEN 1 ELSE 0 END, shared_at DESC, id DESC`, // #nosec G202 -- 表达式为本文件常量，值走占位符
 		args...)
@@ -165,7 +165,7 @@ func (s *Store) publicLinks(groups []string) (map[string][]model.PublicShare, er
 	for rows.Next() {
 		var grp string
 		var sh model.PublicShare
-		if err := rows.Scan(&grp, &sh.URL, &sh.Code, &sh.SharedAt); err != nil {
+		if err := rows.Scan(&grp, &sh.ID, &sh.URL, &sh.Code, &sh.SharedAt); err != nil {
 			return nil, err
 		}
 		sh.URL = safeLinkURL(sh.URL)

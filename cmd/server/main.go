@@ -100,6 +100,15 @@ func main() {
 		slog.Error("初始化管理员失败", "err", err)
 	}
 
+	// 门户统计明细只保留配置的天数：启动时清一次，避免明细表无限增长
+	retention := cfg.StatsRetentionDays()
+	cutoff := store.DayKey(time.Now().AddDate(0, 0, -retention))
+	if n, err := st.PurgeTraffic(cutoff); err != nil {
+		slog.Warn("清理过期统计失败", "err", err)
+	} else if n > 0 {
+		slog.Info("已清理过期统计", "rows", n, "retention_days", retention)
+	}
+
 	// 运行期可替换的组件（改密钥或代理后重建）
 	var (
 		srv        *api.Server

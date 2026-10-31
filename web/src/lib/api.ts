@@ -203,9 +203,14 @@ export interface User {
 
 /** 门户详情里的一条分享链接 */
 export interface PortalShare {
+  id: number
   url: string
   code: string
   shared_at: string
+  /** 累计互动次数，仅后台统计详情返回 */
+  browses?: number
+  copies?: number
+  opens?: number
 }
 
 /** 门户只暴露展示所需字段，不含内部状态与错误信息；同 TMDB 的多条分享合并为一条 */
@@ -240,6 +245,45 @@ export interface PortalStats {
   /** 已推送资源总数，不随筛选变化 */
   library_total: number
   years: PortalYearStat[]
+}
+
+/** 门户流量趋势里的一天 */
+export interface TrafficDay {
+  date: string
+  pv: number
+  uv: number
+  browses: number
+  copies: number
+  opens: number
+}
+
+/** 热门资源排行里的一条 */
+export interface TrafficLink {
+  id: number
+  title: string
+  year: number
+  media_type: string
+  tmdb_id: number
+  poster_url: string
+  browses: number
+  copies: number
+  opens: number
+}
+
+export interface PortalTraffic {
+  days: number
+  today_pv: number
+  today_uv: number
+  range_pv: number
+  range_uv: number
+  range_browses: number
+  range_copies: number
+  range_opens: number
+  total_browses: number
+  total_copies: number
+  total_opens: number
+  trend: TrafficDay[]
+  top: TrafficLink[]
 }
 
 export class ApiError extends Error {
@@ -443,6 +487,13 @@ export const api = {
     return request<PortalStats>(`/portal/stats?${qs.toString()}`)
   },
   portalLink: (id: number) => request<PortalLink>(`/portal/link/${id}`),
+  portalBrowse: (id: number) => request<void>(`/portal/browse/${id}`, { method: 'POST' }),
+  portalCopy: (id: number) => request<void>(`/portal/copy/${id}`, { method: 'POST' }),
+  portalOpen: (id: number) => request<void>(`/portal/open/${id}`, { method: 'POST' }),
+
+  // 门户流量统计（仅管理员）
+  portalTraffic: (days: number) => request<PortalTraffic>(`/stats/portal?days=${days}`),
+  portalTrafficLink: (id: number) => request<PortalLink>(`/stats/portal/link/${id}`),
 }
 
 export const statusMeta: Record<Status, { label: string; cls: string }> = {

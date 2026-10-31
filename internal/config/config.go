@@ -28,7 +28,32 @@ type Config struct {
 	Proxy    ProxyConfig    `yaml:"proxy"`
 	Rate     RateConfig     `yaml:"rate_limit"`
 	SEO      SEOConfig      `yaml:"seo"`
+	Stats    StatsConfig    `yaml:"stats"`
 }
+
+// StatsConfig 控制门户访问与点击统计。
+type StatsConfig struct {
+	// Enabled 关闭后门户不再记录访问与点击，后台统计接口仍可读历史数据。
+	Enabled bool `yaml:"enabled"`
+	// RetentionDays 是明细保留天数，过期数据在进程启动时清理。
+	RetentionDays int `yaml:"retention_days"`
+}
+
+// StatsEnabled 未加载配置时默认开启，避免调用方到处判空。
+func (c *Config) StatsEnabled() bool {
+	return c == nil || c.Stats.Enabled
+}
+
+// StatsRetentionDays 返回实际生效的保留天数：未配置或非正数取默认值。
+func (c *Config) StatsRetentionDays() int {
+	if c == nil || c.Stats.RetentionDays <= 0 {
+		return DefaultStatsRetentionDays
+	}
+	return c.Stats.RetentionDays
+}
+
+// DefaultStatsRetentionDays 覆盖一个季度的对比窗口，又不至于让明细表无限增长。
+const DefaultStatsRetentionDays = 180
 
 // SEOConfig 收录与搜索引擎站长验证相关配置。
 type SEOConfig struct {
@@ -305,6 +330,7 @@ func Default() *Config {
 		},
 		Proxy: ProxyConfig{Enable: false},
 		SEO:   SEOConfig{SiteName: "光鸭 GO", SiteSubtitle: "资源库"},
+		Stats: StatsConfig{Enabled: true, RetentionDays: DefaultStatsRetentionDays},
 		Rate: RateConfig{
 			TMDB: TMDBRate{
 				Enable:    true,

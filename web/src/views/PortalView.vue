@@ -20,6 +20,7 @@ import Button from '../components/ui/Button.vue'
 import Badge from '../components/ui/Badge.vue'
 import { api, mediaMeta, type PortalLink, type PortalShare, type PortalStats } from '../lib/api'
 import { branding } from '../lib/branding'
+import { copyShare } from '../lib/clipboard'
 import { toast } from '../lib/toast'
 import { safeExternalUrl } from '../lib/utils'
 
@@ -118,6 +119,17 @@ function scheduleURL() {
   urlTimer = window.setTimeout(syncURL, 300)
 }
 
+// 浏览（进详情）、复制、打开各自计数，互不混用；失败不影响交互
+function report(action: 'browse' | 'copy' | 'open', id: number) {
+  const call = action === 'browse' ? api.portalBrowse : action === 'copy' ? api.portalCopy : api.portalOpen
+  call(id).catch(() => {})
+}
+
+// 复制成功才计数，避免用户没拿到链接也被算一次
+async function copyAndReport(s: PortalShare) {
+  if (await copyShare(s)) report('copy', s.id)
+}
+
 async function openDeepLink(id: number) {
   if (detail.value?.id === id) return
   const found = items.value.find((l) => l.id === id)
@@ -135,6 +147,8 @@ async function openDeepLink(id: number) {
 }
 
 function openDetail(l: PortalLink) {
+  // 点海报（整张卡片）进详情，按资源的代表分享记一次浏览
+  report('browse', l.id)
   detail.value = l
   syncURL(true)
 }
@@ -238,36 +252,6 @@ function resetFilters() {
   sort.value = 'new'
   schedule(0)
   syncURL()
-}
-
-async function copyText(text: string) {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text)
-      return true
-    } catch {
-      // 局域网 http 不是安全上下文，或用户拒绝了剪贴板权限，退回旧接口
-    }
-  }
-  const area = document.createElement('textarea')
-  area.value = text
-  area.setAttribute('readonly', '')
-  area.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
-  document.body.appendChild(area)
-  area.select()
-  try {
-    return document.execCommand('copy')
-  } catch {
-    return false
-  } finally {
-    document.body.removeChild(area)
-  }
-}
-
-async function copyShare(s: PortalShare) {
-  const text = s.code ? `${s.url}\n提取码：${s.code}` : s.url
-  if (await copyText(text)) toast.success('链接已复制')
-  else toast.error('复制失败，请重试或点击打开链接')
 }
 
 function onKey(e: KeyboardEvent) {
@@ -737,7 +721,7 @@ onUnmounted(() => {
                     {{ s.shared_at.slice(0, 10) }}
                   </span>
                 </div>
-                <Button v-if="s.url" size="sm" variant="outline" @click="copyShare(s)">
+                <Button v-if="s.url" size="sm" variant="outline" @click="copyAndReport(s)">
                   <Copy class="h-3.5 w-3.5" />
                   复制
                 </Button>
@@ -747,6 +731,7 @@ onUnmounted(() => {
                   target="_blank"
                   rel="noopener noreferrer"
                   class="flex shrink-0 items-center gap-1 text-xs text-[var(--color-brand)] hover:underline"
+                  @click="report('open', s.id)"
                 >
                   <ExternalLink class="h-3.5 w-3.5" />
                   打开

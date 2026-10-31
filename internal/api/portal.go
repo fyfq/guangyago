@@ -106,3 +106,25 @@ func (s *Server) portalLink(c *gin.Context) {
 	item.PosterURL = s.publicPoster(item)
 	c.JSON(http.StatusOK, item)
 }
+
+// portalBrowse / portalCopy / portalOpen 分别接收浏览、复制、打开上报。
+func (s *Server) portalBrowse(c *gin.Context) { s.portalAction(c, model.ActionBrowse) }
+func (s *Server) portalCopy(c *gin.Context)   { s.portalAction(c, model.ActionCopy) }
+func (s *Server) portalOpen(c *gin.Context)   { s.portalAction(c, model.ActionOpen) }
+
+// portalAction 校验分享属于已收录资源后按该分享记一次对应动作。
+func (s *Server) portalAction(c *gin.Context, action string) {
+	id, ok := parseID(c)
+	if !ok {
+		return
+	}
+	if _, err := s.store.GetPublic(id); errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "资源不存在"})
+		return
+	} else if err != nil {
+		serverError(c, err)
+		return
+	}
+	s.recordPortalAction(id, action)
+	c.Status(http.StatusNoContent)
+}

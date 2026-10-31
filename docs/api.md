@@ -107,7 +107,7 @@
 ```
 
 ### `GET /api/portal/link/:id`
-单条已收录资源（`PublicLink`），供门户 `/?id=<n>` 深链直接打开详情。传组内任意一条分享的 `id` 都返回整组资源与全部链接。未收录（还没刮削成功）→ `404 {"error":"资源不存在"}`；`id` 非法 → `400`。
+单条已收录资源（`PublicLink`），供门户 `/?id=<n>` 深链直接打开详情。传组内任意一条分享的 `id` 都返回整组资源与全部链接。只读接口，不产生打开统计。未收录（还没刮削成功）→ `404 {"error":"资源不存在"}`；`id` 非法 → `400`。
 
 ```json
 { "id": 42, "title": "千与千寻", "original_title": "千と千尋の神隠し", "year": 2001,
@@ -116,12 +116,23 @@
   "url": "https://www.guangyapan.com/s/…", "code": "abcd", "shared_at": "2026-10-27 16:37:34",
   "link_count": 2,
   "links": [
-    { "url": "https://www.guangyapan.com/s/…", "code": "abcd", "shared_at": "2026-10-27 16:37:34" },
-    { "url": "https://www.guangyapan.com/s/…", "code": "efgh", "shared_at": "2026-09-01 08:00:00" }
+    { "id": 42, "url": "https://www.guangyapan.com/s/…", "code": "abcd", "shared_at": "2026-10-27 16:37:34" },
+    { "id": 41, "url": "https://www.guangyapan.com/s/…", "code": "efgh", "shared_at": "2026-09-01 08:00:00" }
   ] }
 ```
 
 > 有本地缓存时 `poster_url` 是 `/posters/movie-129.jpg`；缓存缺失时才回退 `https://image.tmdb.org/…`。
+
+### `POST /api/portal/browse/:id` · `POST /api/portal/copy/:id` · `POST /api/portal/open/:id`
+三类资源互动分别上报，`id` 是这次互动对应的分享（`PublicShare.id`）。计数按分享记录，后台统计展开后能看到每条分享各自的累计浏览/复制/打开次数。只校验资源是否在库，不返回内容。
+
+- `browse`：点海报（列表卡片）进详情，按该资源的代表分享（最近分享的一条）计。
+- `copy`：复制分享链接成功，按用户实际操作的那条分享计。
+- `open`：点分享链接「打开」，按用户实际操作的那条分享计。
+- 成功 → `204`（无响应体）
+- 资源未收录/已下架 → `404 {"error":"资源不存在"}`；`id` 非法 → `400`
+
+前端按 fire-and-forget 调用，失败不影响跳转；复制失败、深链直接打开详情都不计数。
 
 ### `GET /robots.txt`
 纯文本（`Cache-Control: public, max-age=3600`）。放行 `/`，屏蔽 `/admin`、`/login`、`/setup`、`/api/`，并声明 Sitemap 地址。
@@ -276,6 +287,37 @@ XML（`Content-Type: application/xml`，`Cache-Control: public, max-age=3600`）
 { "total": 319,
   "pending":4, "review":0, "scraping":0, "scraped":12,
   "unmatched":1, "pushed":300, "push_failed":2, "failed":0 }
+```
+
+### `GET /api/stats/portal`（管理员）
+门户流量统计。`days` 只接受 `7` / `30` / `90`，其余回落 30。数据按服务器本地日期聚合；明细保留天数由 `stats.retention_days` 控制，进程启动时清理过期行。
+
+- PV：门户首页整页加载次数（`/`、`/?id=<n>` 的 HTML 请求），SPA 内部切换不重复计。
+- UV：按天去重。访客标识走 Cookie `gy_vid`（一年有效），服务端只存 HMAC 摘要，不落 IP/UA。
+- 浏览 / 复制 / 打开：三类互动分开计数，按分享（`links.id`）记录；复制失败与深链加载 `GET /api/portal/link/:id` 不计。同一部资源的多条分享各记各的，`top` 里按 TMDB 分组求和。资源被删除后不再出现在排行里，但区间与累计数保留。
+
+```json
+{ "days": 30, "today_pv": 18, "today_uv": 9,
+  "range_pv": 412, "range_uv": 137,
+  "range_browses": 210, "range_copies": 64, "range_opens": 96,
+  "total_browses": 3200, "total_copies": 980, "total_opens": 1580,
+  "trend": [ { "date": "2026-10-01", "pv": 12, "uv": 7, "browses": 6, "copies": 2, "opens": 4 } ],
+  "top": [ { "id": 42, "title": "千与千寻", "year": 2001, "media_type": "movie",
+             "tmdb_id": 129, "poster_url": "/posters/movie-129.jpg",
+             "browses": 31, "copies": 12, "opens": 23 } ] }
+```
+
+`trend` 覆盖窗口内每一天（无数据补 0）；`range_uv` 是窗口内去重访客数，不是每日 UV 相加；`top` 最多 20 条，按累计互动（浏览+复制+打开）降序（同一 TMDB 的多条分享合并计数，代表行取最近分享的一条）。关闭 `stats.enabled` 后不再写入新记录，接口仍可读历史数据。
+
+### `GET /api/stats/portal/link/:id`（管理员）
+后台统计展开某条资源时取详情，返回与 `GET /api/portal/link/:id` 相同的 `PublicLink`，但每条分享额外带累计浏览 `browses`、复制 `copies`、打开 `opens` 次数（0 次也会出现）。`id` 传组内任意一条分享即可；未收录/已删除 → `404 {"error":"资源不存在"}`；`id` 非法 → `400`。
+
+```json
+{ "id": 42, "title": "千与千寻", "link_count": 2,
+  "links": [
+    { "id": 42, "url": "https://www.guangyapan.com/s/…", "code": "abcd", "shared_at": "2026-10-27 16:37:34", "browses": 20, "copies": 8, "opens": 18 },
+    { "id": 41, "url": "https://www.guangyapan.com/s/…", "code": "efgh", "shared_at": "2026-09-01 08:00:00", "browses": 11, "copies": 4, "opens": 5 }
+  ] }
 ```
 
 ### `POST /api/links/text`

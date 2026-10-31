@@ -81,6 +81,7 @@
 - `users` / `sessions` / `login_attempts` / `schema_meta`：会话外键 `ON DELETE CASCADE`，删账号即清会话。
 - `release_date`（schema v2 新增）存 TMDB 的 `release_date` / `first_air_date`，只收 `YYYY-MM-DD` 完整日期（`scraper.normalizeReleaseDate` 把 `"2024"` 这类残串当未知），由 `UpdateScraped` 在刮削时写入，`Create` 阶段为空。门户 `?sort=release` 用它排序，缺日期时退到 `year || '-01-01'`，年份也没有的排最后——存量库不必重刮也能得到一个合理的顺序，想要精确顺序就重刮。
 - 加列走 `migrate()` 里的显式步骤（`ensureReleaseDateColumn` 先查 `pragma_table_info` 再 `ALTER`）：`CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列，而 SQLite 的 `ALTER TABLE ADD COLUMN` 不幂等。加列同时把 `schemaVersion` +1。
+- 门户统计（schema v3，v4 扩展）：`portal_visits(day, visitor_hash, views)` 按天+访客聚合，UV 是当天行数、PV 是 `views` 之和；`resource_events(link_id, day, action, hits)` 按分享+天+动作聚合，`action` 取 `browse` / `copy` / `open`（浏览海报、复制链接、打开链接分开计数），`link_id` 是具体某条分享，同一 TMDB 的多条分享各记各的，榜单查询时再按分组求和。两者都只做 `INSERT ... ON CONFLICT DO UPDATE`，明细由启动时的 `PurgeTraffic` 按 `stats.retention_days` 清理。访客标识来自 Cookie `gy_vid`，入库前过 `auth.HashToken`，不存 IP/UA。v4 迁移会把旧的 `resource_opens` 行整体转成 `action='open'` 后删表。
 
 ## 5. 流水线
 

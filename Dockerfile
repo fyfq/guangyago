@@ -23,6 +23,9 @@ FROM golang:1.26-alpine AS server
 ARG GOPROXY=https://proxy.golang.org,direct
 ARG GOSUMDB=sum.golang.org
 ARG TARGETARCH=amd64
+# VERSION / COMMIT 由 CI 或本地 --build-arg 注入，本地直接 docker build 得到 dev/unknown
+ARG VERSION=dev
+ARG COMMIT=unknown
 ENV GOPROXY=${GOPROXY} GOSUMDB=${GOSUMDB}
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -30,9 +33,18 @@ RUN go mod download
 COPY . .
 COPY --from=web /src/web/dist ./internal/web/dist
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/gygo ./cmd/server
+    SHORT_COMMIT=$(printf '%.7s' "${COMMIT}") && \
+    go build -trimpath \
+      -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${SHORT_COMMIT}" \
+      -o /out/gygo ./cmd/server
 
+# 运行层重新声明 ARG，才能写进 LABEL
 FROM alpine:3.22
+ARG VERSION=dev
+ARG COMMIT=unknown
+LABEL org.opencontainers.image.title="gygo" \
+      org.opencontainers.image.version=${VERSION} \
+      org.opencontainers.image.revision=${COMMIT}
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=server /out/gygo /app/gygo

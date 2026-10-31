@@ -78,6 +78,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.event_name == 'workflow_dispatch' && 'edge' || 'main' }}
+            COMMIT=${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -144,6 +147,8 @@ jobs:
             "$IMAGE:$SHA_TAG"
 
       # 回退路径：该提交没有可复用的 main 镜像时才真正构建多架构镜像。
+      # 注意：走 promote（复制 sha 镜像）时，镜像里的 VERSION 仍是 main（构建时 tag 未知），
+      # 这里回退构建才能把正式版本号写进二进制。
       - name: Build & push (fallback)
         if: ${{ steps.src.outputs.found != 'true' }}
         uses: docker/build-push-action@v6
@@ -155,5 +160,8 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.minor }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            VERSION=${{ steps.tags.outputs.version }}
+            COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

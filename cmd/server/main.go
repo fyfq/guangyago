@@ -30,15 +30,27 @@ import (
 	"github.com/odin/gygo/internal/web"
 )
 
+// Version / Commit 由构建期 -ldflags -X 注入；本地 go build 拿到的是这里的默认值。
+var (
+	Version = "dev"
+	Commit  = "unknown"
+)
+
 func main() {
 	var (
-		configPath = flag.String("config", "config.yaml", "配置文件路径")
-		addr       = flag.String("addr", "", "覆盖监听地址，如 :8080")
-		importPath = flag.String("import", "", "导入 CSV 或分享文本后退出")
-		noBot      = flag.Bool("no-bot", false, "不启动 Telegram Bot 接收")
-		verbose    = flag.Bool("v", false, "输出调试日志")
+		configPath  = flag.String("config", "config.yaml", "配置文件路径")
+		addr        = flag.String("addr", "", "覆盖监听地址，如 :8080")
+		importPath  = flag.String("import", "", "导入 CSV 或分享文本后退出")
+		noBot       = flag.Bool("no-bot", false, "不启动 Telegram Bot 接收")
+		verbose     = flag.Bool("v", false, "输出调试日志")
+		showVersion = flag.Bool("version", false, "打印版本信息后退出")
 	)
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("gygo %s (commit %s)\n", Version, Commit)
+		return
+	}
 
 	level := slog.LevelInfo
 	if *verbose {

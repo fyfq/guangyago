@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/config"
-	"github.com/odin/guangya-go/internal/netutil"
-	"github.com/odin/guangya-go/internal/notifier"
-	"github.com/odin/guangya-go/internal/scraper"
+	"github.com/odin/gygo/internal/config"
+	"github.com/odin/gygo/internal/netutil"
+	"github.com/odin/gygo/internal/notifier"
+	"github.com/odin/gygo/internal/scraper"
 )
 
 // settings 返回当前关键配置是否已就绪（不返回密钥明文）。

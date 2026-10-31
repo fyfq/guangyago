@@ -17,9 +17,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/odin/guangya-go/internal/config"
-	"github.com/odin/guangya-go/internal/netutil"
-	"github.com/odin/guangya-go/internal/ratelimit"
+	"github.com/odin/gygo/internal/config"
+	"github.com/odin/gygo/internal/netutil"
+	"github.com/odin/gygo/internal/ratelimit"
 )
 
 // defaultAPIBase 是 TMDB v3 的官方根地址。

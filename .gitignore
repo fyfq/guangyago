@@ -23,6 +23,6 @@ backups/
 # 部署产物
 *.zip
 *.tar.gz
-guangya-go
+gygo
 # 测试覆盖率报告
 coverage.out

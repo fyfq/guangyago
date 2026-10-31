@@ -1,10 +1,10 @@
 <div align="center">
 
-# 🦆 光鸭 GO
+# 🦆 gygo
 
 **光鸭云盘分享链接 → TMDB 刮削 → Telegram 频道推送**，一个二进制跑完整条链路。
 
-[![CI](https://img.shields.io/github/actions/workflow/status/fyfq/guangyago/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white)](https://github.com/fyfq/guangyago/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/fyfq/gygo/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white)](https://github.com/fyfq/gygo/actions/workflows/ci.yml)
 ![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 ![Vue%203](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)
 ![SQLite%20纯Go驱动](https://img.shields.io/badge/SQLite-%E7%BA%AFGo%E9%A9%B1%E5%8A%A8-003B57?logo=sqlite&logoColor=white)
@@ -38,8 +38,8 @@
 ```bash
 cp config.example.yaml config.yaml   # 填入 TMDB Key / Bot Token / 频道 ID
 make build
-./bin/guangya -import ~/Downloads/批量分享记录_xxx.csv   # 导入 CSV
-./bin/guangya                                            # 启动，示例配置里监听 :8090
+./bin/gygo -import ~/Downloads/批量分享记录_xxx.csv   # 导入 CSV
+./bin/gygo                                            # 启动，示例配置里监听 :8090
 ```
 
 打开 `http://localhost:8090/` 是公开门户，`/admin` 是后台。用户表为空时访问任意页面都会跳到安装向导 `/setup`。
@@ -65,7 +65,7 @@ curl -s localhost:8090/api/health
 
 `http://服务器IP:8090/` 是公开门户，`/admin` 是后台。想在无头环境初始化管理员，设 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 环境变量，服务启动时会直接建号（仅在用户表为空时生效）。
 
-本机已有的 `data/`（`guangya.db` + `posters/`）整个拷过去就是无缝迁移，只有 `config.yaml` 的位置从项目根换成 `data/config.yaml`。
+本机已有的 `data/`（`gygo.db` + `posters/`）整个拷过去就是无缝迁移，只有 `config.yaml` 的位置从项目根换成 `data/config.yaml`。
 
 #### 构建期网络（服务器出网差时）
 
@@ -90,12 +90,12 @@ Dockerfile 首行**不要**写 `# syntax=docker/dockerfile:1`：那会让 BuildK
 镜像构建要出网（npm + Go modules）。服务器不方便出网时，在能出网的机器上建好再传：
 
 ```bash
-docker build --platform linux/amd64 -t guangya:latest .
-docker save guangya:latest | gzip > guangya.tar.gz
-scp guangya.tar.gz server:/tmp && ssh server 'gunzip -c /tmp/guangya.tar.gz | docker load'
+docker build --platform linux/amd64 -t gygo:latest .
+docker save gygo:latest | gzip > gygo.tar.gz
+scp gygo.tar.gz server:/tmp && ssh server 'gunzip -c /tmp/gygo.tar.gz | docker load'
 ```
 
-之后服务器上 `docker compose up -d` 即可（`image: guangya:latest` 已就位，`build: .` 用不上）。
+之后服务器上 `docker compose up -d` 即可（`image: gygo:latest` 已就位，`build: .` 用不上）。
 
 ### 裸机：一个二进制，服务器完全不出网
 
@@ -104,19 +104,19 @@ Docker Hub 连不上的时候，最省事的是不装 Docker。前端被 `go:emb
 ```bash
 # 本机（或 CI）构建：前端产物会被一起编进二进制
 make web
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o guangya ./cmd/server
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o gygo ./cmd/server
 ```
 
 ```bash
-# 服务器上：tar 包里含 guangya 与 guangya.service（DynamicUser，免建账号、免 chown）
-tar xzf guangya-bare-*-linux-amd64.tar.gz -C /tmp/gy
-sudo install -m 755 /tmp/gy/guangya /usr/local/bin/guangya
-sudo cp /tmp/gy/guangya.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now guangya
+# 服务器上：tar 包里含 gygo 与 gygo.service（DynamicUser，免建账号、免 chown）
+tar xzf gygo-bare-*-linux-amd64.tar.gz -C /tmp/gy
+sudo install -m 755 /tmp/gy/gygo /usr/local/bin/gygo
+sudo cp /tmp/gy/gygo.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now gygo
 curl -s localhost:8090/api/health
 ```
 
-数据落在 unit 里 `StateDirectory` 指的 `/var/lib/guangya/data/`（库、海报、日志、`config.yaml`），备份迁移同样是 tar 这一个目录。要换端口改 unit 里的 `-addr`，再 `daemon-reload` + `restart`。这条路径的密钥只在本机与服务器之间走一次文件拷贝，不过网。
+数据落在 unit 里 `StateDirectory` 指的 `/var/lib/gygo/data/`（库、海报、日志、`config.yaml`），备份迁移同样是 tar 这一个目录。要换端口改 unit 里的 `-addr`，再 `daemon-reload` + `restart`。这条路径的密钥只在本机与服务器之间走一次文件拷贝，不过网。
 
 ### 密钥与配置
 
@@ -135,13 +135,13 @@ curl -s localhost:8090/api/health
 
 ```bash
 docker compose stop                          # 干净关闭会把 WAL 合并回主库
-tar czf guangya-data.tgz data/
+tar czf gygo-data.tgz data/
 # 新机先备好源码目录（含 docker-compose.yml），再：
-scp guangya-data.tgz new-server:/opt/guangya/ && ssh new-server 'tar xzf guangya-data.tgz'
+scp gygo-data.tgz new-server:/opt/gygo/ && ssh new-server 'tar xzf gygo-data.tgz'
 docker compose up -d
 ```
 
-`data/` 里只有 `guangya.db*`、`posters/`、`branding/`、`session.key`、`config.yaml` 是状态；`logs/` 是历史运行记录，迁移时可以不拷。
+`data/` 里只有 `gygo.db*`、`posters/`、`branding/`、`session.key`、`config.yaml` 是状态；`logs/` 是历史运行记录，迁移时可以不拷。
 
 > ⚠️ `session.key` 决定所有会话令牌摘要。**换掉这台文件，已登录的会话全部失效**，用户需要重新登录。
 
@@ -193,7 +193,7 @@ sitemap 里的地址要用公网域名，记得把 `seo.base_url` 固定成 `htt
 - TMDB 图片域名走白名单防 SSRF；非 http(s) 的海报地址不会被发给 Telegram。
 - 运行日志写在 `data/logs/`（目录 0750、文件 0600），单文件 5 MB、轮转保留 3 份；访问日志只记路由模式与状态码，不落查询串里的提取码。下载入口仅管理员可用，且不接受客户端指定文件名。
 
-部署到公网时请放在 HTTPS 之后，并把 `config.yaml` 与 `data/guangya.db` 权限收紧到 600。
+部署到公网时请放在 HTTPS 之后，并把 `config.yaml` 与 `data/gygo.db` 权限收紧到 600。
 
 ## 📤 推送卡片格式
 

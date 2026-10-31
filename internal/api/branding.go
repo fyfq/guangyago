@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/config"
+	"github.com/odin/gygo/internal/config"
 )
 
 const (

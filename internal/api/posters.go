@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/model"
 )
 
 // posterNameRe 只放行刮削缓存落盘的海报名（<media_type>-<tmdb_id>.jpg）。

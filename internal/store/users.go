@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/model"
 )
 
 // userColumns 是用户表的查询字段，密码哈希单独按需读取。

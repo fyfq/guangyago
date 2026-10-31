@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/model"
 )
 
 // 管理员下载当前日志文件；未启用日志文件时明确返回 404。

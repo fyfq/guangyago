@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/auth"
-	"github.com/odin/guangya-go/internal/config"
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/auth"
+	"github.com/odin/gygo/internal/config"
+	"github.com/odin/gygo/internal/model"
 )
 
 // setupStatus 返回系统安装状态

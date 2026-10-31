@@ -1,4 +1,4 @@
-module github.com/odin/guangya-go
+module github.com/odin/gygo
 
 go 1.26.0
 

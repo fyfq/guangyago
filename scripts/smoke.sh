@@ -5,7 +5,7 @@
 # 用法：make smoke（需要先 make web 生成嵌入前端，再 make build）
 set -uo pipefail
 
-BIN="${BIN:-bin/guangya}"
+BIN="${BIN:-bin/gygo}"
 PORT="${PORT:-18099}"
 BASE="http://127.0.0.1:${PORT}"
 WORK="$(mktemp -d)"
@@ -91,7 +91,7 @@ server:
   addr: "127.0.0.1:${PORT}"
   secure_cookie: false
 storage:
-  dsn: ${WORK}/data/guangya.db
+  dsn: ${WORK}/data/gygo.db
   data_dir: ${WORK}/data
   poster_dir: ${WORK}/data/posters
 tmdb:
@@ -168,7 +168,7 @@ expect_contains '门户按上映时间排序' "$(get '/api/portal/links?sort=rel
 echo '站点品牌'
 # 占位符必须由服务端替换，否则爬虫与首屏源码里会出现字面量 {{SITE_NAME}}
 expect_absent '首页不残留站点名占位符' "$index_html" '{{SITE_NAME}}'
-expect_contains '未配置时用默认站点名' "$index_html" '<title>光鸭 GO - 网盘资源分享平台</title>'
+expect_contains '未配置时用默认站点名' "$index_html" '<title>gygo - 网盘资源分享平台</title>'
 expect_contains '保存站点标题' "$(admin_post /api/settings '{"seo":{"site_name":"冒烟站"}}')" '"ok":true'
 expect_contains '首页标题跟随配置' "$(get /)" '<title>冒烟站 - 网盘资源分享平台</title>'
 expect_contains '品牌接口无需登录即可读取' "$(get /api/branding)" '"site_name":"冒烟站"'

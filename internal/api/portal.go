@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/model"
 )
 
 var errBadMediaType = errors.New("media_type 只能是 movie 或 tv")

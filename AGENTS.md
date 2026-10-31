@@ -1,4 +1,4 @@
-# 光鸭 GO · AI 协作约定
+# gygo · AI 协作约定
 
 这份文件是给 AI（Qoder/Claude/Cursor 等）看的**项目宪法**。写代码前先读这一页，能省掉 80% 的返工。
 人类 reviewer 也照这份对。
@@ -43,22 +43,22 @@ api ──▶ 所有其它内部包
 
 ## 三、参考实现（照这些抄，别自造）
 
-**Store 事务写方法** → [internal/store/users.go](file:///Users/odin/Documents/Qoder/光鸭 GO/internal/store/users.go) 里 `UpdateUserGuarded` / `DeleteUserGuarded`  
+**Store 事务写方法** → [internal/store/users.go](file:///Users/odin/Documents/Qoder/gygo/internal/store/users.go) 里 `UpdateUserGuarded` / `DeleteUserGuarded`  
 要点：`tx.Begin()` → `defer tx.Rollback()` → 校验业务不变式（如最后一个管理员）→ 失败返回 sentinel error（如 `ErrLastAdmin`）→ `tx.Commit()`。
 
-**限流 HTTP 客户端** → [internal/scraper/tmdb.go](file:///Users/odin/Documents/Qoder/光鸭 GO/internal/scraper/tmdb.go) 里 `get()`  
+**限流 HTTP 客户端** → [internal/scraper/tmdb.go](file:///Users/odin/Documents/Qoder/gygo/internal/scraper/tmdb.go) 里 `get()`  
 要点：`ratelimit.Limiter.Wait` → `http.NewRequestWithContext` → `io.LimitReader(resp.Body, maxAPIResponseBytes)` → 状态码分类。
 
-**API handler 错误契约** → [internal/api/auth.go](file:///Users/odin/Documents/Qoder/光鸭 GO/internal/api/auth.go)  
+**API handler 错误契约** → [internal/api/auth.go](file:///Users/odin/Documents/Qoder/gygo/internal/api/auth.go)  
 要点：请求校验失败 → `400 + 中文 error`；鉴权失败 → `401`；权限不足 → `403`；资源不存在 → `404`；业务不变式违反（如 `ErrLastAdmin`）→ `400` + 具体中文；DB/内部错误 → `serverError(c, err)` 统一 500 + 日志。
 
-**按大小滚动的日志文件与分级访问日志** → [internal/logging/logging.go](file:///Users/odin/Documents/Qoder/光鸭 GO/internal/logging/logging.go) 里 `Writer` / `rotate`，配 [cmd/server/main.go](file:///Users/odin/Documents/Qoder/光鸭 GO/cmd/server/main.go) 里 `requestLog`  
+**按大小滚动的日志文件与分级访问日志** → [internal/logging/logging.go](file:///Users/odin/Documents/Qoder/gygo/internal/logging/logging.go) 里 `Writer` / `rotate`，配 [cmd/server/main.go](file:///Users/odin/Documents/Qoder/gygo/cmd/server/main.go) 里 `requestLog`  
 要点：slog 双写标准输出与 `data/logs/app.log`（目录 0750、文件 0600）；5xx→Error、4xx 或耗时超 1 秒→Warn、轮询与静态资源→Debug，`quietPaths` 是白名单而不是黑名单；单条日志超过上限也先滚动。新增字段一律小写下划线，**不要把密钥、Cookie 或提取码写进日志**。
 
-**服务端注入 HTML head** → [internal/api/seo.go](file:///Users/odin/Documents/Qoder/光鸭 GO/internal/api/seo.go) 里 `headTags` / `injectHeadTags`  
+**服务端注入 HTML head** → [internal/api/seo.go](file:///Users/odin/Documents/Qoder/gygo/internal/api/seo.go) 里 `headTags` / `injectHeadTags`  
 要点：CSP 禁内联脚本，任何需要出现在首屏源码的 meta/link 都走服务端字符串注入；用户可控部分**必须**先经过白名单字符过滤（参考 `sanitizeCanonicalPath` / `sanitizeCanonicalQuery`）。
 
-**前端 URL 绑定** → [web/src/lib/utils.ts](file:///Users/odin/Documents/Qoder/光鸭 GO/web/src/lib/utils.ts) 里 `safeExternalUrl`  
+**前端 URL 绑定** → [web/src/lib/utils.ts](file:///Users/odin/Documents/Qoder/gygo/web/src/lib/utils.ts) 里 `safeExternalUrl`  
 要点：`:href` 绑定用户/CSV 输入时**必须**过一层协议白名单（http/https），杜绝 `javascript:` / `data:` XSS。
 
 ## 四、代码风格约定
@@ -74,7 +74,7 @@ api ──▶ 所有其它内部包
 ### Vue/TypeScript
 - 全站**统一系统默认字体**，禁止在 CSS 里声明 `font-family` 覆盖。
 - `target="_blank"` 必须带 `rel="noopener noreferrer"`。
-- **禁止** `v-html`。文案渲染走白名单解析器（参考 [web/src/views/PushView.vue](file:///Users/odin/Documents/Qoder/光鸭 GO/web/src/views/PushView.vue) 里的 `parseCaptionSegments`）。
+- **禁止** `v-html`。文案渲染走白名单解析器（参考 [web/src/views/PushView.vue](file:///Users/odin/Documents/Qoder/gygo/web/src/views/PushView.vue) 里的 `parseCaptionSegments`）。
 - 用户可控数据绑到 `:href`/`:src` 前，走 `safeExternalUrl`。
 - 组件内 `import` 顺序：Vue → lucide → 本地 UI → lib → 相对。
 
@@ -119,7 +119,7 @@ api ──▶ 所有其它内部包
 |---|---|
 | 密钥与运行配置 | `config.yaml`、`.env`、`.env.*`（`!` 例外：`.env.example`） |
 | 运行数据 | `data/`（含 `session.key`、数据库、海报、`branding/` 站点素材、`logs/` 运行日志）、`backups/`、`.workbuddy/` |
-| 构建产物 | `bin/`、`web/dist/`、`internal/web/dist/*`（`!` 例外：`.gitkeep`）、`guangya-go`、`*.zip`、`*.tar.gz` |
+| 构建产物 | `bin/`、`web/dist/`、`internal/web/dist/*`（`!` 例外：`.gitkeep`）、`gygo`、`*.zip`、`*.tar.gz` |
 | 依赖目录 | `node_modules/`、`web/node_modules/` |
 | 杂项 | `.DS_Store`、`*.log`、`*.db`、`*.db-wal`、`*.db-shm` |
 
@@ -184,7 +184,7 @@ git diff --cached --stat    # 单次 diff 控制在 300 行内
 | push `v*` | `v2.1.0`、`2.1`、`latest` | 复制 main 已构建的 `sha-<7>`，不重复构建；缺镜像才回退完整构建；`latest` 只由正式 tag 推进 |
 | 手动 dispatch | `edge` | 临时验证，可随时覆盖 |
 
-部署固定版本号（`ghcr.io/fyfq/guangyago:v2.1.0`），回滚只改这一行；拉 `latest` 等于"最近一次正式发版"。
+部署固定版本号（`ghcr.io/fyfq/gygo:v2.1.0`），回滚只改这一行；拉 `latest` 等于"最近一次正式发版"。
 
 ### 构建触发
 

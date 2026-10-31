@@ -10,9 +10,9 @@ import (
 	"testing/fstest"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/config"
-	"github.com/odin/guangya-go/internal/model"
-	"github.com/odin/guangya-go/internal/store"
+	"github.com/odin/gygo/internal/config"
+	"github.com/odin/gygo/internal/model"
+	"github.com/odin/gygo/internal/store"
 )
 
 func newSEOServer(t *testing.T) (*Server, *store.Store) {
@@ -89,10 +89,10 @@ func TestItemHeadTags_Movie(t *testing.T) {
 		Overview: "两个囚徒的故事", PosterURL: "https://image.tmdb.org/t/p/w500/x.jpg",
 		TMDBID: 278, Runtime: 142, VoteAverage: 8.7, Genres: "剧情,犯罪",
 	}
-	got := itemHeadTags(item, "光鸭 GO", "https://gy.example.com")
+	got := itemHeadTags(item, "gygo", "https://gy.example.com")
 
 	for _, want := range []string{
-		"<title>肖申克的救赎（1994） - 光鸭云盘网盘分享 | 光鸭 GO</title>",
+		"<title>肖申克的救赎（1994） - 光鸭云盘网盘分享 | gygo</title>",
 		`content="两个囚徒的故事。《肖申克的救赎》电影，1994 年，时长 142 分钟，评分 8.7/10。光鸭云盘网盘分享，点击获取提取码与在线观看地址。"`,
 		`<meta property="og:url" content="https://gy.example.com/?id=7" />`,
 		`<meta property="og:image" content="https://image.tmdb.org/t/p/w500/x.jpg" />`,
@@ -114,7 +114,7 @@ func TestItemHeadTags_Movie(t *testing.T) {
 
 func TestItemHeadTags_TVWithoutPoster(t *testing.T) {
 	item := &model.PublicLink{ID: 3, Title: "怪奇物语", MediaType: model.MediaTV}
-	got := itemHeadTags(item, "光鸭 GO", "https://gy.example.com")
+	got := itemHeadTags(item, "gygo", "https://gy.example.com")
 	if !strings.Contains(got, `"@type":"TVSeries"`) {
 		t.Errorf("剧集应输出 TVSeries: %s", got)
 	}
@@ -132,7 +132,7 @@ func TestItemHeadTags_EscapesHostileTitle(t *testing.T) {
 		ID: 1, Title: `</title><script>alert(1)</script>`, MediaType: model.MediaMovie,
 		Overview: `" onmouseover="alert(2)`, PosterURL: `https://x.example/"><svg onload=3>`,
 	}
-	got := itemHeadTags(item, "光鸭 GO", "https://gy.example.com")
+	got := itemHeadTags(item, "gygo", "https://gy.example.com")
 	if strings.Contains(got, "<script>alert(1)</script>") {
 		t.Errorf("标题未转义，可注入脚本: %s", got)
 	}
@@ -193,14 +193,14 @@ func TestRequestedPublicItem(t *testing.T) {
 func TestWriteIndexInjectsItemMeta(t *testing.T) {
 	s, st := newSEOServer(t)
 	id := seedPushedLink(t, st, &model.Link{Title: "教父", Year: 1972, MediaType: model.MediaMovie, Overview: "科莱昂家族"})
-	head := "<title>光鸭 GO - 网盘资源分享平台</title>"
+	head := "<title>gygo - 网盘资源分享平台</title>"
 	body, status := writeIndex(s, "/?id="+itoa(id), head)
 	if status != http.StatusOK {
 		t.Errorf("已收录资源的深链应返回 200，实际 %d", status)
 	}
 
 	for _, want := range []string{
-		"<title>教父（1972） - 光鸭云盘网盘分享 | 光鸭 GO</title>",
+		"<title>教父（1972） - 光鸭云盘网盘分享 | gygo</title>",
 		`<link rel="canonical" href="https://gy.example.com/?id=`,
 		`<script id="structured-data" data-item-id="` + itoa(id) + `" type="application/ld+json">`,
 	} {
@@ -221,7 +221,7 @@ func TestWriteIndexInjectsItemMeta(t *testing.T) {
 
 func TestWriteIndexListKeepsSiteTitle(t *testing.T) {
 	s, _ := newSEOServer(t)
-	head := "<title>光鸭 GO - 网盘资源分享平台</title>"
+	head := "<title>gygo - 网盘资源分享平台</title>"
 	body, status := writeIndex(s, "/", head)
 	if status != http.StatusOK {
 		t.Errorf("列表页应返回 200，实际 %d", status)
@@ -236,7 +236,7 @@ func TestWriteIndexListKeepsSiteTitle(t *testing.T) {
 
 func TestWriteIndexUnknownIDReturns404(t *testing.T) {
 	s, _ := newSEOServer(t)
-	head := "<title>光鸭 GO - 网盘资源分享平台</title>" +
+	head := "<title>gygo - 网盘资源分享平台</title>" +
 		`<meta name="robots" content="index, follow" />`
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -360,11 +360,11 @@ func TestBuildMovieSchema_SplitsGenres(t *testing.T) {
 }
 
 func TestItemHeadTags_OGTypeFollowsMediaType(t *testing.T) {
-	movie := itemHeadTags(&model.PublicLink{ID: 1, Title: "电影"}, "光鸭 GO", "https://gy.example.com")
+	movie := itemHeadTags(&model.PublicLink{ID: 1, Title: "电影"}, "gygo", "https://gy.example.com")
 	if !strings.Contains(movie, `<meta property="og:type" content="video.movie" />`) {
 		t.Errorf("电影 og:type 错误: %s", movie)
 	}
-	tv := itemHeadTags(&model.PublicLink{ID: 2, Title: "剧集", MediaType: model.MediaTV}, "光鸭 GO", "https://gy.example.com")
+	tv := itemHeadTags(&model.PublicLink{ID: 2, Title: "剧集", MediaType: model.MediaTV}, "gygo", "https://gy.example.com")
 	if !strings.Contains(tv, `<meta property="og:type" content="video.tv_show" />`) {
 		t.Errorf("剧集 og:type 应为 video.tv_show: %s", tv)
 	}
@@ -393,13 +393,13 @@ func TestSPAIndexPath(t *testing.T) {
 }
 
 func TestInjectHeadTags_ItemTagsReplaceSiteSocialMeta(t *testing.T) {
-	head := `<title>光鸭 GO - 网盘资源分享平台</title>` + "\n" +
+	head := `<title>gygo - 网盘资源分享平台</title>` + "\n" +
 		`    <meta name="description" content="站点简介" />` + "\n" +
 		`    <meta property="og:type" content="website" />` + "\n" +
 		`    <meta property="og:title" content="站点标题" />` + "\n" +
 		`    <meta name="twitter:card" content="summary" />` + "\n" +
 		`    <meta name="keywords" content="光鸭,网盘资源" />`
-	item := "<title>教父（1972） · 光鸭 GO</title>\n" +
+	item := "<title>教父（1972） · gygo</title>\n" +
 		`    <meta name="description" content="科莱昂家族" />` + "\n" +
 		`    <meta property="og:type" content="video.movie" />` + "\n" +
 		`    <meta property="og:title" content="教父（1972）" />` + "\n" +
@@ -425,9 +425,9 @@ func TestInjectHeadTags_ItemTagsReplaceSiteSocialMeta(t *testing.T) {
 func TestWriteIndex_ItemPageHasSingleOGTitle(t *testing.T) {
 	s, st := newSEOServer(t)
 	id := seedPushedLink(t, st, &model.Link{Title: "阿凡达", Year: 2009, MediaType: model.MediaMovie, Overview: "潘多拉星球"})
-	head := `<title>光鸭 GO - 网盘资源分享平台</title>` + "\n    " +
+	head := `<title>gygo - 网盘资源分享平台</title>` + "\n    " +
 		`<meta property="og:type" content="website" />` + "\n    " +
-		`<meta property="og:title" content="光鸭 GO - 网盘资源分享平台" />`
+		`<meta property="og:title" content="gygo - 网盘资源分享平台" />`
 	body, status := writeIndex(s, "/?id="+itoa(id), head)
 	if status != http.StatusOK {
 		t.Errorf("已收录资源的深链应返回 200，实际 %d", status)

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/model"
 )
 
 func TestPosterNameRe(t *testing.T) {

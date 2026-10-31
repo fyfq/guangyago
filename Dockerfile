@@ -30,13 +30,13 @@ RUN go mod download
 COPY . .
 COPY --from=web /src/web/dist ./internal/web/dist
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/guangya ./cmd/server
+    go build -trimpath -ldflags="-s -w" -o /out/gygo ./cmd/server
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
-COPY --from=server /out/guangya /app/guangya
+COPY --from=server /out/gygo /app/gygo
 EXPOSE 8090
 USER 1000:1000
 # 配置与数据都落在 /app/data（宿主 bind mount）。-addr 固定，宿主改端口只动 compose 的 ports。
-ENTRYPOINT ["/app/guangya", "-config", "/app/data/config.yaml", "-addr", ":8090"]
+ENTRYPOINT ["/app/gygo", "-config", "/app/data/config.yaml", "-addr", ":8090"]

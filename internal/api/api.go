@@ -11,12 +11,12 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/config"
-	"github.com/odin/guangya-go/internal/model"
-	"github.com/odin/guangya-go/internal/notifier"
-	"github.com/odin/guangya-go/internal/parser"
-	"github.com/odin/guangya-go/internal/pipeline"
-	"github.com/odin/guangya-go/internal/store"
+	"github.com/odin/gygo/internal/config"
+	"github.com/odin/gygo/internal/model"
+	"github.com/odin/gygo/internal/notifier"
+	"github.com/odin/gygo/internal/parser"
+	"github.com/odin/gygo/internal/pipeline"
+	"github.com/odin/gygo/internal/store"
 )
 
 // Server 提供链接管理的 HTTP 接口。

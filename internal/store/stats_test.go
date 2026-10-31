@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/model"
 )
 
 func statsDay(y int, m time.Month, d int) time.Time {

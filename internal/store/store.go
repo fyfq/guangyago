@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/model"
 	_ "modernc.org/sqlite"
 )
 

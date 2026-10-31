@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/odin/guangya-go/internal/config"
-	"github.com/odin/guangya-go/internal/model"
-	"github.com/odin/guangya-go/internal/notifier"
-	"github.com/odin/guangya-go/internal/scraper"
-	"github.com/odin/guangya-go/internal/store"
+	"github.com/odin/gygo/internal/config"
+	"github.com/odin/gygo/internal/model"
+	"github.com/odin/gygo/internal/notifier"
+	"github.com/odin/gygo/internal/scraper"
+	"github.com/odin/gygo/internal/store"
 )
 
 func newTestPipeline(t *testing.T) (*Pipeline, *store.Store) {

@@ -10,9 +10,9 @@ import (
 	"testing/fstest"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/auth"
-	"github.com/odin/guangya-go/internal/model"
-	"github.com/odin/guangya-go/internal/pipeline"
+	"github.com/odin/gygo/internal/auth"
+	"github.com/odin/gygo/internal/model"
+	"github.com/odin/gygo/internal/pipeline"
 )
 
 func TestHealthAndSEORoutes(t *testing.T) {
@@ -39,7 +39,7 @@ func TestHealthAndSEORoutes(t *testing.T) {
 	rec = e.callAnon(http.MethodGet, "/api/structured-data", nil)
 	requireStatus(t, rec, http.StatusOK)
 	site := rec.Body.String()
-	for _, want := range []string{`"@type":"WebSite"`, `"name":"光鸭 GO"`, `"url":"http://example.com"`} {
+	for _, want := range []string{`"@type":"WebSite"`, `"name":"gygo"`, `"url":"http://example.com"`} {
 		if !strings.Contains(site, want) {
 			t.Errorf("站点结构化数据缺少 %q: %s", want, site)
 		}

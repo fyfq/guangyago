@@ -1,4 +1,4 @@
-# 光鸭 GO 接口文档
+# gygo 接口文档
 
 覆盖 `internal/api` 当前注册的全部路由。最后核对 2026-10-30（新增同源海报接口）。改接口请同步更新本文（维护清单见 [docs/dev-guide.md](dev-guide.md#12-维护清单)）。
 
@@ -162,15 +162,15 @@ XML（`Content-Type: application/xml`，`Cache-Control: public, max-age=3600`）
 ```
 
 ### `GET /api/structured-data`
-站点级 Schema.org（`WebSite` + `SearchAction`），由门户注入 `<head>`。`name` 取 `seo.site_name`，缺省「光鸭 GO」。
+站点级 Schema.org（`WebSite` + `SearchAction`），由门户注入 `<head>`。`name` 取 `seo.site_name`，缺省「gygo」。
 
 ```json
 {
   "@context": "https://schema.org",
   "@type": "WebSite",
-  "name": "光鸭 GO",
+  "name": "gygo",
   "url": "https://gy.example.com",
-  "description": "光鸭 GO 资源库 - 网盘资源分享平台",
+  "description": "gygo 资源库 - 网盘资源分享平台",
   "potentialAction": {
     "@type": "SearchAction",
     "target": "https://gy.example.com/?q={search_term_string}",
@@ -207,7 +207,7 @@ XML（`Content-Type: application/xml`，`Cache-Control: public, max-age=3600`）
 
 ```html
 <link rel="canonical" href="https://gy.example.com/?id=42" />
-<title>千与千寻（2001） · 光鸭 GO</title>
+<title>千与千寻（2001） · gygo</title>
 <meta name="description" content="…" />
 <meta property="og:type" content="video.movie" />
 <meta property="og:title" content="千与千寻（2001）" />
@@ -233,7 +233,7 @@ XML（`Content-Type: application/xml`，`Cache-Control: public, max-age=3600`）
 { "site_name": "光鸭影视库", "logo_url": "/branding/logo.png?v=1730246400", "icon_url": "" }
 ```
 
-- `site_name` 来自 `seo.site_name`，留空回落到默认值 `光鸭 GO`。
+- `site_name` 来自 `seo.site_name`，留空回落到默认值 `gygo`。
 - 首页原始 HTML 的 `title` / `description` / `og:` / `twitter:` 由服务端把模板里的 `{{SITE_NAME}}` 占位符替换成站点名（先 HTML 转义再拼，防止闭合 `<title>` 往 head 里塞标签）。
 - 配了站点图标时额外注入 `<link rel="icon" href="/branding/icon.png?v=…" />`；没配就不注入，交给浏览器默认。
 
@@ -406,7 +406,7 @@ TMDB 预览，**只读不写库**，用于补 ID 时先核对。参数可放 JSO
     "telegram": { "enable": true, "interval_ms": 3100, "channel_only": false, "shared_credentials": false, "paid_broadcast": false },
     "guangya":  { "enable": true, "concurrency": 2 }
   },
-  "seo": { "google_verification": "...", "base_url": "https://gy.example.com", "site_name": "光鸭 GO" }
+  "seo": { "google_verification": "...", "base_url": "https://gy.example.com", "site_name": "gygo" }
 }
 ```
 
@@ -464,7 +464,7 @@ TMDB 预览，**只读不写库**，用于补 ID 时先核对。参数可放 JSO
 - 落盘文件名固定为 `<kind><嗅探扩展名>`（`logo.png`、`icon.jpg`…），换格式时删掉旧文件；目录 `<storage.data_dir>/branding`（0750），文件 0600。先写 `.tmp` 再改名，避免留下半张图。
 - `400`：`缺少 logo 或 icon 文件` / `只支持 PNG / JPEG / GIF / WebP 图片` / `图片超过 512 KB，请压缩后再上传` / `图片内容为空` / `读取上传文件失败`。
 - `503 配置未加载`；未配置 `storage.data_dir` 或写盘失败 → `500`。
-- 站点标题不在这里改，走 `POST /api/settings` 的 `seo.site_name`（留空即回到默认「光鸭 GO」）。
+- 站点标题不在这里改，走 `POST /api/settings` 的 `seo.site_name`（留空即回到默认「gygo」）。
 
 ### `DELETE /api/branding?kind=logo|icon&save_to_file=true`
 删除一类素材文件并清空配置里的引用。→ `Branding`

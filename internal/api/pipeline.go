@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/model"
-	"github.com/odin/guangya-go/internal/pipeline"
-	"github.com/odin/guangya-go/internal/scraper"
+	"github.com/odin/gygo/internal/model"
+	"github.com/odin/gygo/internal/pipeline"
+	"github.com/odin/gygo/internal/scraper"
 )
 
 // pickIDs 解析批量请求：显式 ids 优先；否则按状态（缺省时用 fallback）取库里的记录。

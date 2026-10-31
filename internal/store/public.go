@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/model"
 )
 
 // 刮削成功即视为收录，推送只是发布到频道的动作，不影响门户可见性。

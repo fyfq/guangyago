@@ -329,7 +329,7 @@ func Default() *Config {
 			AutoPush:   true,
 		},
 		Proxy: ProxyConfig{Enable: false},
-		SEO:   SEOConfig{SiteName: "光鸭 GO", SiteSubtitle: "资源库"},
+		SEO:   SEOConfig{SiteName: "gygo", SiteSubtitle: "资源库"},
 		Stats: StatsConfig{Enabled: true, RetentionDays: DefaultStatsRetentionDays},
 		Rate: RateConfig{
 			TMDB: TMDBRate{

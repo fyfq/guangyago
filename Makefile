@@ -9,10 +9,10 @@ tools:
 	$(GO) install github.com/securego/gosec/v2/cmd/gosec@latest
 
 build:
-	$(GO) build -o bin/guangya ./cmd/server
+	$(GO) build -o bin/gygo ./cmd/server
 
 run: build
-	./bin/guangya -config config.yaml
+	./bin/gygo -config config.yaml
 
 # 冒烟：临时目录起隔离实例，跑通安装→登录→门户/SEO→后台读取，全程不出网
 smoke: build
@@ -20,7 +20,7 @@ smoke: build
 
 # 导入光鸭批量分享记录或单条分享文本
 import: build
-	./bin/guangya -config config.yaml -import "$(FILE)"
+	./bin/gygo -config config.yaml -import "$(FILE)"
 
 vet:
 	$(GO) vet ./...

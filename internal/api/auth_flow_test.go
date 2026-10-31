@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/auth"
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/auth"
+	"github.com/odin/gygo/internal/model"
 )
 
 func TestSetupFlow(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/config"
+	"github.com/odin/gygo/internal/config"
 )
 
 // 图片只按内容嗅探判定格式，所以夹具只需要带上真实签名头，不必是完整可解码的图片。
@@ -263,7 +263,7 @@ func TestBrandingState_DefaultsAndNilConfig(t *testing.T) {
 	// 配置未加载也不能报错：站点名退回默认值，素材地址为空。
 	bare := &Server{}
 	body, _ = callHandler(t, bare.brandingState, "/api/branding")
-	if !strings.Contains(body, `"site_name":"光鸭 GO"`) || !strings.Contains(body, `"logo_url":""`) {
+	if !strings.Contains(body, `"site_name":"gygo"`) || !strings.Contains(body, `"logo_url":""`) {
 		t.Errorf("空配置回包异常: %s", body)
 	}
 }

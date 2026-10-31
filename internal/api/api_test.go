@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/config"
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/config"
+	"github.com/odin/gygo/internal/model"
 )
 
 func init() { gin.SetMode(gin.TestMode) }

@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/model"
 )
 
 // maxSitemapURLs 是单个 sitemap 文件的条目上限。超出后 /sitemap.xml 改吐 sitemapindex，
@@ -133,7 +133,7 @@ func (s *Server) structuredData(c *gin.Context) {
 		"@type":       "WebSite",
 		"name":        s.siteName(),
 		"url":         baseURL,
-		"description": "光鸭 GO 资源库 - 网盘资源分享平台",
+		"description": "gygo 资源库 - 网盘资源分享平台",
 		"potentialAction": map[string]any{
 			"@type":       "SearchAction",
 			"target":      baseURL + "/?q={search_term_string}",
@@ -205,7 +205,7 @@ func (s *Server) siteName() string {
 	return defaultSiteName
 }
 
-const defaultSiteName = "光鸭 GO"
+const defaultSiteName = "gygo"
 
 // googleMetaTag 返回需要注入 index.html 原始 HTML 的验证标签；未配置 token 时返回空串。
 // Google 的「HTML 标签」验证要求 meta 出现在首屏 HTML 源码里，前端用 JS 补挂是验不过的。

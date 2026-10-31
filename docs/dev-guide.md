@@ -1,4 +1,4 @@
-# 光鸭 GO 开发文档
+# gygo 开发文档
 
 面向维护者。描述当前代码的真实结构，与 `docs/design.md`（需求与原型）、`docs/tech-selection.md`（选型）、`docs/design-system.md`（界面规范）互补。接口逐条说明见 [docs/api.md](api.md)。
 
@@ -160,12 +160,12 @@
 
 ```bash
 make web                      # npm run build → 拷进 internal/web/dist，并 touch dist/.gitkeep
-go build -o guangya-go ./cmd/server   # 必须再编一次，否则前端改动看不见
-./guangya-go -config config.yaml      # 按示例配置监听 :8090
+go build -o gygo ./cmd/server   # 必须再编一次，否则前端改动看不见
+./gygo -config config.yaml      # 按示例配置监听 :8090
 ```
 
 - 日常联调：`cd web && npm run dev`（5173，代理 `/api` 到 127.0.0.1:8090），同时跑着后端二进制即可，不用反复 `make web`。
-- 只有 `make build` 会把产物写成 `bin/guangya`，裸二进制在 `./guangya-go`。
+- 只有 `make build` 会把产物写成 `bin/gygo`，裸二进制在 `./gygo`。
 - 类型检查没有进构建脚本（`npm run build` 不跑 `vue-tsc`），改动 TS 后手动 `cd web && npx vue-tsc --noEmit`。
 - 测试：`go test ./...` 全部离线，不出网。**接口与存储层已有真实覆盖**：`internal/api/harness_test.go` 起一套「真 `Server.Register` 路由 + 独立 SQLite 实例」的环境，直接打 HTTP 验证状态码契约与登录 / 设置 / 下载日志流程；`internal/store/crud_test.go` 覆盖增删改与事务不变式；`cmd/server`、`internal/logging`、`internal/ratelimit`、`internal/netutil` 也各有测试。加接口时顺着现有 harness 补（成功 / 失败 / 边界各一条），**不要 mock store**——上一版文档写过「api 与 store 要用真实隔离实例人工验证」，那条已经过期，环境本身已经自动化了。
 - 排查：日志同时写标准输出与 `<data_dir>/logs/app.log`，容器里 `docker logs` 与文件内容一致；设置页底部「运行日志」下载当前文件（仅管理员）。常用检索：`HTTP 请求`（`path`/`status`/`latency_ms`）、`批次结束`（`total`/`done`/`failed`/`elapsed_ms`）、`刮削结果待人工确认`、`推送失败`、`海报发送失败，回退纯文本`、`TMDB 限流，退让后重试`。5xx、4xx 与超过 1 秒的请求会自动升到 Warn/Error，`grep 'level=ERROR'` 就能捞出当天的异常。
@@ -174,16 +174,16 @@ go build -o guangya-go ./cmd/server   # 必须再编一次，否则前端改动�
 - 打接口：`curl -c jar -X POST localhost:8090/api/auth/login -d '{"username":"...","password":"..."}'`，后续 `-b jar`。POST 带 Origin/Referer 时才做同源校验（跨站 403），命令行这类没有来源头的客户端直接放行，浏览器里的 CSRF 防线靠它加 `SameSite=Lax` 双层。
 - 端口占用：`lsof -ti:8090 | xargs kill -9`。
 - Telegram Bot 单实例：同一 Token 只能有一个 getUpdates 消费者，本地再起一个实例会看到 `Conflict: terminated by other getUpdates request`。
-- 干净退出才会把 WAL 合并回主库；热拷贝 `guangya.db` 前先停服务，或连 `-wal`/`-shm` 一起拷。
+- 干净退出才会把 WAL 合并回主库；热拷贝 `gygo.db` 前先停服务，或连 `-wal`/`-shm` 一起拷。
 
 ## 11. 发布与部署
 
 - `Makefile`：`build` / `run` / `import FILE=` / `vet` / `tidy` / `clean` / `web` / `lint` / `smoke` / `cover` / `tools`。
 - `Dockerfile` 三阶段：`node:22-alpine` 出前端 → `golang:1.26-alpine` 交叉编译（`CGO_ENABLED=0`、`-trimpath -s -w`）→ `alpine:3.22` 运行（`ca-certificates`/`tzdata`、`USER 1000`、`EXPOSE 8090`、配置在 `/app/data/config.yaml`）。构建参数 `BUILD_PROXY`（只认 HTTP 端口）、`NPM_REGISTRY`、`GOPROXY`；首行刻意不写 `# syntax=`，避免 BuildKit 先去 Docker Hub 拉前端镜像。
-- `docker-compose.yml`：单服务 `app`，`pull_policy: always` + `image: ghcr.io/fyfq/guangyago:latest`，`8090:8090`，`./data:/app/data`，`host-gateway` 映射 `host.docker.internal`，`/api/health` 健康检查。站点素材写在 `<data_dir>/branding/`、运行日志写在 `<data_dir>/logs/`（都是进程属主可写，0750 目录 / 0600 文件），跟着 `./data` 卷一起备份，无需额外挂载。
+- `docker-compose.yml`：单服务 `app`，`pull_policy: always` + `image: ghcr.io/fyfq/gygo:latest`，`8090:8090`，`./data:/app/data`，`host-gateway` 映射 `host.docker.internal`，`/api/health` 健康检查。站点素材写在 `<data_dir>/branding/`、运行日志写在 `<data_dir>/logs/`（都是进程属主可写，0750 目录 / 0600 文件），跟着 `./data` 卷一起备份，无需额外挂载。
 - `.github/workflows/ci.yml`：push main / PR / 手动触发 → `make tools` → `make lint` → `go test ./...` → `make web && make build` → `make smoke`（约 1 秒）；纯文档改动（`**.md`、`docs/**`、`LICENSE`、`.gitignore`）不跑，同分支并发自动取消旧任务。
 - `.github/workflows/docker-image.yml`：CI 成功（`workflow_run`）或手动触发 → QEMU+Buildx 多架构（amd64+arm64）构建 `main`、`sha-<7>`、`edge`，失败提交不产出镜像；push `v*` tag → 只把 main 侧已构建的 `sha-<7>` 复制成版本标签与 `latest`（`buildx imagetools create`，秒级，不重复构建）；该提交没有 main 镜像时最多等 15 分钟，仍缺失才回退完整构建。
-- 裸机：交叉编译出的单文件无任何依赖（纯 Go SQLite + 嵌入前端），配 `guangya.service`（`DynamicUser`，状态目录 `/var/lib/guangya/data/`）。
+- 裸机：交叉编译出的单文件无任何依赖（纯 Go SQLite + 嵌入前端），配 `gygo.service`（`DynamicUser`，状态目录 `/var/lib/gygo/data/`）。
 - 公网部署务必挂 HTTPS 反向代理；`PROXY_ADDR` 指向宿主机代理时写 `host.docker.internal:7890`，写 `127.0.0.1` 指向的是容器自己。
 
 ## 12. 维护清单

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/model"
 )
 
 func newTestStore(t *testing.T) *Store {

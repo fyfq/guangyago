@@ -88,7 +88,7 @@ func TestDefault(t *testing.T) {
 	if cfg.Rate.TMDB.PerSecond != DefaultTMDBPerSecond {
 		t.Errorf("默认 TMDB 速率异常: %v", cfg.Rate.TMDB.PerSecond)
 	}
-	if cfg.SEO.SiteName != "光鸭 GO" {
+	if cfg.SEO.SiteName != "gygo" {
 		t.Errorf("默认站点名异常: %q", cfg.SEO.SiteName)
 	}
 }

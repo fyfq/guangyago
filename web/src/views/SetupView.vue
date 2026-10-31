@@ -79,7 +79,7 @@ function goToLogin() {
 }
 
 onMounted(async () => {
-  document.title = '安装向导 · 光鸭 GO'
+  document.title = '安装向导 · gygo'
   // 检查是否已安装
   try {
     const status = await api.setupStatus()
@@ -100,7 +100,7 @@ onMounted(async () => {
         <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-brand)]">
           <Cloud class="h-7 w-7 text-white" />
         </div>
-        <h1 class="mt-4 text-2xl font-semibold">光鸭 GO</h1>
+        <h1 class="mt-4 text-2xl font-semibold">gygo</h1>
         <p class="mt-2 text-sm text-[var(--color-muted)]">欢迎！请完成以下设置开始使用</p>
       </div>
 

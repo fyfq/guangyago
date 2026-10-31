@@ -17,17 +17,17 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/api"
-	"github.com/odin/guangya-go/internal/auth"
-	"github.com/odin/guangya-go/internal/config"
-	"github.com/odin/guangya-go/internal/logging"
-	"github.com/odin/guangya-go/internal/model"
-	"github.com/odin/guangya-go/internal/notifier"
-	"github.com/odin/guangya-go/internal/parser"
-	"github.com/odin/guangya-go/internal/pipeline"
-	"github.com/odin/guangya-go/internal/scraper"
-	"github.com/odin/guangya-go/internal/store"
-	"github.com/odin/guangya-go/internal/web"
+	"github.com/odin/gygo/internal/api"
+	"github.com/odin/gygo/internal/auth"
+	"github.com/odin/gygo/internal/config"
+	"github.com/odin/gygo/internal/logging"
+	"github.com/odin/gygo/internal/model"
+	"github.com/odin/gygo/internal/notifier"
+	"github.com/odin/gygo/internal/parser"
+	"github.com/odin/gygo/internal/pipeline"
+	"github.com/odin/gygo/internal/scraper"
+	"github.com/odin/gygo/internal/store"
+	"github.com/odin/gygo/internal/web"
 )
 
 func main() {

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/odin/guangya-go/internal/config"
+	"github.com/odin/gygo/internal/config"
 )
 
 // seamLog 记录假 Bot API 收到的调用顺序，并把 sendMessage 的正文送进 Sent 通道。

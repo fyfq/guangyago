@@ -2,7 +2,7 @@ import { reactive } from 'vue'
 import { api, type Branding } from './api'
 
 /** 站点没配标题时的兜底值，与后端 defaultSiteName 保持一致 */
-export const DEFAULT_SITE_NAME = '光鸭 GO'
+export const DEFAULT_SITE_NAME = 'gygo'
 
 export const branding = reactive<Branding>({
   site_name: DEFAULT_SITE_NAME,

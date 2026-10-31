@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/model"
 )
 
 // exportLinks 按当前筛选条件导出 CSV（带 BOM，Excel 直接打开不乱码）。

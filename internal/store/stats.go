@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/odin/guangya-go/internal/model"
+	"github.com/odin/gygo/internal/model"
 )
 
 // dayLayout 是统计明细按天聚合用的日期格式（服务器本地时区）。

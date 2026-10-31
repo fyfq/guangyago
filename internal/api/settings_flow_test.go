@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/odin/guangya-go/internal/config"
-	"github.com/odin/guangya-go/internal/model"
-	"github.com/odin/guangya-go/internal/pipeline"
-	"github.com/odin/guangya-go/internal/store"
+	"github.com/odin/gygo/internal/config"
+	"github.com/odin/gygo/internal/model"
+	"github.com/odin/gygo/internal/pipeline"
+	"github.com/odin/gygo/internal/store"
 )
 
 type settingsView struct {
@@ -53,7 +53,7 @@ func TestSettingsAPI(t *testing.T) {
 	if before.TMDBConfigured || before.TelegramConfigured {
 		t.Fatal("初始配置不应标记为已填写密钥")
 	}
-	if before.SEO.SiteName != "光鸭 GO" {
+	if before.SEO.SiteName != "gygo" {
 		t.Errorf("默认站点名异常: %q", before.SEO.SiteName)
 	}
 

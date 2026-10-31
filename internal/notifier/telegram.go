@@ -14,10 +14,10 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
-	"github.com/odin/guangya-go/internal/config"
-	"github.com/odin/guangya-go/internal/model"
-	"github.com/odin/guangya-go/internal/netutil"
-	"github.com/odin/guangya-go/internal/ratelimit"
+	"github.com/odin/gygo/internal/config"
+	"github.com/odin/gygo/internal/model"
+	"github.com/odin/gygo/internal/netutil"
+	"github.com/odin/gygo/internal/ratelimit"
 )
 
 // Notifier 负责把资源卡片推送到 Telegram 频道，并运行 Bot 接收录入消息。

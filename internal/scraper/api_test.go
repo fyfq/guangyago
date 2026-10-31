@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/odin/guangya-go/internal/config"
-	"github.com/odin/guangya-go/internal/ratelimit"
+	"github.com/odin/gygo/internal/config"
+	"github.com/odin/gygo/internal/ratelimit"
 )
 
 type rtFunc func(*http.Request) (*http.Response, error)

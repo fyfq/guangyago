@@ -1,8 +1,8 @@
-name: guangya
+name: gygo
 
 services:
   app:
-    image: ghcr.io/fyfq/guangyago:latest
+    image: ghcr.io/fyfq/gygo:latest
     pull_policy: always
     restart: unless-stopped
     ports:

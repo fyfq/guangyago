@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/odin/guangya-go/internal/config"
+	"github.com/odin/gygo/internal/config"
 )
 
 // seamTMDB 起一个假 TMDB，按请求路径返回固定 JSON，并记录最后一次请求的查询串。

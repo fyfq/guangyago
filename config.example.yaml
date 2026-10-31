@@ -9,7 +9,7 @@ server:
     # 反代在边缘终止 TLS 时（本机 http://），需要显式 true；纯本地 http 调试设为 false。
     # secure_cookie: true
 storage:
-    dsn: data/guangya.db
+    dsn: data/gygo.db
     data_dir: data
     poster_dir: data/posters
     # 门户是否用同源 /posters/<media>-<id>.jpg 展示本地缓存海报（需 tmdb.cache_poster 为 true）。
@@ -74,8 +74,8 @@ seo:
     google_verification: ""
     # 站点根地址（不含末尾斜杠）。反代后强烈建议固定，否则 sitemap/canonical 域名跟着 Host 走
     base_url: "https://gy.example.com"
-    # 出现在页面标题、结构化数据与站点地图说明里；留空回落到「光鸭 GO」
-    site_name: "光鸭 GO"
+    # 出现在页面标题、结构化数据与站点地图说明里；留空回落到「gygo」
+    site_name: "gygo"
     site_subtitle: "资源库" # 门户头部副标题，留空隐藏
     # 下面两项由「后台 → SEO → 站点标识」上传素材时写入，不用手工填。
     # 图片落在 <data_dir>/branding/ 下，文件名按真实格式固定为 logo.png / icon.jpg 等；
